@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -693,7 +694,11 @@ func layerSteps(in Input, h Half, teardown, setup Stage) (layerPlan, error) {
 		var replaced []string
 		for _, e := range entries {
 			if e.Backup != "" {
-				replaced = append(replaced, fmt.Sprintf("! %s (kept in arcus backups: %s)", e.Host, h.Layer.BackupTag(e.Backup)))
+				where := "kept as " + filepath.Base(e.Backup) // a sidecar file
+				if tag := h.Layer.BackupTag(e.Backup); tag != "" {
+					where = "kept in arcus backups: " + tag
+				}
+				replaced = append(replaced, fmt.Sprintf("! %s (%s)", e.Host, where))
 			}
 		}
 		if from < len(kept) {

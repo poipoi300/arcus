@@ -176,7 +176,7 @@ func TestRenameMovesStoreAndLegacyBackups(t *testing.T) {
 			if l.Entries[0].Backup != want || !exists(want) {
 				t.Errorf("legacy=%v: backup = %q, want %q", legacy, l.Entries[0].Backup, want)
 			}
-			if !legacy && exists(filepath.Join(sb.s.StateDir, "backups", "old", "etc")) {
+			if !legacy && exists(filepath.Join(sb.s.StateDir, "backups", "old")) {
 				t.Error("the old backup directory was not pruned")
 			}
 			must(t, sb.deactivate("new", false))
@@ -251,4 +251,83 @@ func TestMoveDurable(t *testing.T) {
 	if err := moveDurable(filepath.Join(dir, "missing"), filepath.Join(dir, "c")); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("moving a missing file: %v", err)
 	}
+}
+
+// A crash between the copy into place and the removal of the source leaves
+// both; turning the module off converges either way.
+func TestInterruptedCopyMoveConverges(t *testing.T) {
+	eachHalf(t, func(t *testing.T, sb *sandbox) {
+		copyMoves(t, true)
+		sb.hostFile("f", "ORIGINAL")
+		sb.moduleFile("p", "f", "p")
+		before := sb.snapshot()
+		must(t, sb.activate("p"))
+
+		// Teardown crashed after the backup was copied back to the host.
+		l, err := sb.s.LoadLedger("p")
+		must(t, err)
+		must(t, os.Remove(l.Entries[0].Host))
+		must(t, copyDurable(l.Entries[0].Backup, l.Entries[0].Host))
+		findings, err := sb.s.Audit("p", sb.stack)
+		must(t, err)
+		if len(findings) == 0 || !strings.Contains(findings[0], "duplicate") {
+			t.Errorf("audit of the duplicate: %v", findings)
+		}
+
+		must(t, sb.deactivate("p", false))
+		assertSame(t, before, sb.snapshot())
+		sb.assertNoLedgers()
+		if dangling, _ := sb.s.DanglingBackups(); len(dangling) != 0 {
+			t.Errorf("dangling after convergence: %v", dangling)
+		}
+	})
+}
+
+// A directory where a file was deployed can't be copied to another
+// filesystem; -f leaves it next to the host and says so.
+func TestForeignDirectoryStaysInPlaceAcrossFilesystems(t *testing.T) {
+	eachHalf(t, func(t *testing.T, sb *sandbox) {
+		copyMoves(t, true)
+		sb.hostFile("g", "ORIGINAL")
+		sb.moduleFile("p", "g", "p")
+		must(t, sb.activate("p"))
+		p := filepath.Join(sb.host, "g")
+		must(t, os.Remove(p))
+		must(t, os.MkdirAll(filepath.Join(p, "sub"), 0o755))
+		must(t, os.WriteFile(filepath.Join(p, "sub", "mine"), []byte("mine"), 0o644))
+
+		must(t, sb.deactivate("p", true))
+		if sb.read("g") != "ORIGINAL" || sb.read("g.arcus-foreign/sub/mine") != "mine" {
+			t.Errorf("g = %q, aside = %q", sb.read("g"), sb.read("g.arcus-foreign/sub/mine"))
+		}
+		if len(sb.warns) != 1 || !strings.Contains(sb.warns[0], "stays here") {
+			t.Errorf("warning = %v", sb.warns)
+		}
+	})
+}
+
+func TestGitDirectoriesAreRefused(t *testing.T) {
+	eachHalf(t, func(t *testing.T, sb *sandbox) {
+		sb.moduleFile("p", "proj/.git/config", "x")
+		err := sb.activate("p")
+		if err == nil || !strings.Contains(err.Error(), "may not deploy into a .git directory") {
+			t.Fatalf("activate: %v", err)
+		}
+		sb.assertNoLedgers()
+	})
+}
+
+func TestStoreDirectoriesArePrivate(t *testing.T) {
+	eachHalf(t, func(t *testing.T, sb *sandbox) {
+		sb.hostFile("d/f", "ORIGINAL")
+		sb.moduleFile("p", "d/f", "p")
+		must(t, sb.activate("p"))
+		for _, rel := range []string{"backups", "backups/orig", "backups/orig/etc/d"} {
+			info, err := os.Stat(filepath.Join(sb.s.StateDir, rel))
+			must(t, err)
+			if info.Mode().Perm() != 0o700 {
+				t.Errorf("%s is %v, want 0700", rel, info.Mode().Perm())
+			}
+		}
+	})
 }

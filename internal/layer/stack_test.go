@@ -421,6 +421,13 @@ func TestCancelledActivationRollsBack(t *testing.T) {
 	}
 }
 
+// copyMoves makes every move in the test copy across filesystems, as if the
+// state directory were on another one.
+func copyMoves(t *testing.T, on bool) {
+	forceExdev = on
+	t.Cleanup(func() { forceExdev = false })
+}
+
 type crash struct{}
 
 // runUntilCrash runs op with a crash injected at the n-th crash point and
@@ -432,8 +439,9 @@ func runUntilCrash(sb *sandbox, n int, op func() error) (crashed bool, err error
 			panic(crash{})
 		}
 	}
+	afterCopy = sb.s.crashPoint
 	defer func() {
-		sb.s.crashHook = nil
+		sb.s.crashHook, afterCopy = nil, nil
 		if r := recover(); r != nil {
 			if _, ok := r.(crash); !ok {
 				panic(r)
@@ -508,66 +516,74 @@ func TestCrashAtAnyPointConverges(t *testing.T) {
 	}
 
 	for _, h := range halves {
-		t.Run(h.name+"/activation", func(t *testing.T) {
-			for n := 1; ; n++ {
-				sb := newSandbox(t, h)
-				setup(sb)
-				original := sb.snapshot()
-				must(t, sb.activate("a"))
-				withA := sb.snapshot()
+		for _, exdev := range []bool{false, true} {
+			name := h.name
+			if exdev {
+				name += "-exdev"
+			}
+			t.Run(name+"/activation", func(t *testing.T) {
+				copyMoves(t, exdev)
+				for n := 1; ; n++ {
+					sb := newSandbox(t, h)
+					setup(sb)
+					original := sb.snapshot()
+					must(t, sb.activate("a"))
+					withA := sb.snapshot()
 
-				crashed, err := runUntilCrash(sb, n, func() error { return sb.s.Activate(context.Background(), "b", sb.stack) })
-				must(t, err)
-				if !crashed {
-					if n == 1 {
-						t.Fatal("no crash points were hit")
+					crashed, err := runUntilCrash(sb, n, func() error { return sb.s.Activate(context.Background(), "b", sb.stack) })
+					must(t, err)
+					if !crashed {
+						if n == 1 {
+							t.Fatal("no crash points were hit")
+						}
+						t.Logf("crashed at each of %d points", n-1)
+						break
 					}
-					t.Logf("crashed at each of %d points", n-1)
-					break
+					sb.assertLedgerCovers(withA, original)
+
+					must(t, sb.s.Rollback("b"))
+					assertSame(t, withA, sb.snapshot())
+					must(t, sb.deactivate("a", false))
+					assertSame(t, original, sb.snapshot())
+					sb.assertNoLedgers()
 				}
-				sb.assertLedgerCovers(withA, original)
+			})
 
-				must(t, sb.s.Rollback("b"))
-				assertSame(t, withA, sb.snapshot())
-				must(t, sb.deactivate("a", false))
-				assertSame(t, original, sb.snapshot())
-				sb.assertNoLedgers()
-			}
-		})
+			t.Run(name+"/deactivation", func(t *testing.T) {
+				copyMoves(t, exdev)
+				// Reference: the target after a clean removal of a from under b.
+				ref := newSandbox(t, h)
+				setup(ref)
+				must(t, ref.activate("a"))
+				must(t, ref.activate("b"))
+				must(t, ref.deactivate("a", false))
+				onlyB := ref.snapshot()
 
-		t.Run(h.name+"/deactivation", func(t *testing.T) {
-			// Reference: the target after a clean removal of a from under b.
-			ref := newSandbox(t, h)
-			setup(ref)
-			must(t, ref.activate("a"))
-			must(t, ref.activate("b"))
-			must(t, ref.deactivate("a", false))
-			onlyB := ref.snapshot()
+				for n := 1; ; n++ {
+					sb := newSandbox(t, h)
+					setup(sb)
+					original := sb.snapshot()
+					must(t, sb.activate("a"))
+					must(t, sb.activate("b"))
+					both := sb.snapshot()
 
-			for n := 1; ; n++ {
-				sb := newSandbox(t, h)
-				setup(sb)
-				original := sb.snapshot()
-				must(t, sb.activate("a"))
-				must(t, sb.activate("b"))
-				both := sb.snapshot()
+					crashed, err := runUntilCrash(sb, n, func() error { return sb.deactivate("a", false) })
+					must(t, err)
+					if !crashed {
+						assertSame(t, onlyB, sb.snapshot())
+						t.Logf("crashed at each of %d points", n-1)
+						break
+					}
+					sb.assertLedgerCovers(both, original)
 
-				crashed, err := runUntilCrash(sb, n, func() error { return sb.deactivate("a", false) })
-				must(t, err)
-				if !crashed {
+					must(t, sb.deactivate("a", false))
 					assertSame(t, onlyB, sb.snapshot())
-					t.Logf("crashed at each of %d points", n-1)
-					break
+					must(t, sb.deactivate("b", false))
+					assertSame(t, original, sb.snapshot())
+					sb.assertNoLedgers()
 				}
-				sb.assertLedgerCovers(both, original)
-
-				must(t, sb.deactivate("a", false))
-				assertSame(t, onlyB, sb.snapshot())
-				must(t, sb.deactivate("b", false))
-				assertSame(t, original, sb.snapshot())
-				sb.assertNoLedgers()
-			}
-		})
+			})
+		}
 	}
 }
 

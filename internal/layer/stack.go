@@ -302,6 +302,10 @@ func (s *Stacker) planActivation(module string, below []*Ledger, checkAccess boo
 			return err
 		}
 
+		if slices.Contains(strings.Split(filepath.ToSlash(s.relTarget(host)), "/"), ".git") {
+			problems = append(problems, fmt.Sprintf("%s: a module may not deploy into a .git directory (the state history can't track one)", host))
+			return nil
+		}
 		if s.ownData(host) {
 			problems = append(problems, fmt.Sprintf("%s: refusing to layer over arcus's own data", host))
 			return nil
@@ -372,13 +376,14 @@ func ownerTag(host string, below []*Ledger) string {
 
 // step is one planned teardown action for an entry.
 type step struct {
-	idx      int     // index into the ledger's entries
-	next     *Ledger // lowest module above that deploys the same host path, or nil
-	nextIdx  int
-	loc      string // where this entry's deployment currently lives ("" = nowhere)
-	remove   bool   // loc holds our deployment and must be removed
-	foreign  bool   // loc holds something we did not put there
-	finished bool   // a previous interrupted run already completed this step
+	idx       int     // index into the ledger's entries
+	next      *Ledger // lowest module above that deploys the same host path, or nil
+	nextIdx   int
+	loc       string // where this entry's deployment currently lives ("" = nowhere)
+	remove    bool   // loc holds our deployment and must be removed
+	foreign   bool   // loc holds something we did not put there
+	finished  bool   // a previous interrupted run already completed this step
+	duplicate bool   // an interrupted move left the backup next to an identical host file
 }
 
 // planStep classifies one entry. It is written so that re-running teardown
@@ -419,6 +424,16 @@ func planStep(l *Ledger, idx int, above []*Ledger) step {
 		st.remove = true
 	case st.next == nil && e.Backup != "" && !exists(e.Backup):
 		st.finished = true // original already restored by an interrupted run
+	case st.next == nil && e.Backup != "" && identical(st.loc, e.Backup):
+		// A move across filesystems copies before it removes the source, so a
+		// crash can leave both. Activation crashed after copying the host's
+		// file into the backup: the host still holds it, and nothing was
+		// deployed. Teardown crashed after copying the backup back: the host
+		// already holds the restored original. Either way the host has the
+		// real file and the backup is a duplicate to drop. (A deployment
+		// identical to the backup was matched by owns above and is replaced by
+		// the backup, which is the same content.)
+		st.duplicate = true
 	default:
 		st.foreign = true
 	}
@@ -488,6 +503,14 @@ func (s *Stacker) teardownEntry(l *Ledger, idx int, above []*Ledger) error {
 		return nil
 	}
 
+	if st.duplicate {
+		if err := removeDurable(e.Backup); err != nil {
+			return fmt.Errorf("removing the duplicate backup %q: %w", e.Backup, err)
+		}
+		s.pruneStore(e.Backup)
+		return nil
+	}
+
 	switch {
 	case st.remove:
 		if err := removeDurable(st.loc); err != nil {
@@ -497,11 +520,21 @@ func (s *Stacker) teardownEntry(l *Ledger, idx int, above []*Ledger) error {
 		s.crashPoint()
 	case st.foreign:
 		aside := uniquePath(s.storePath(s.foreignDir(), e.Host))
-		if err := moveIn(st.loc, aside); err != nil {
+		err := moveIn(st.loc, aside)
+		note := ""
+		if errors.Is(err, errCannotCopy) {
+			// A directory or special file where a file was deployed, on another
+			// filesystem than the state directory: it stays next to the host.
+			s.pruneStore(aside)
+			aside = uniquePath(st.loc + ".arcus-foreign")
+			err = renameDurable(st.loc, aside)
+			note = " (it can't be copied to another filesystem, so it stays here)"
+		}
+		if err != nil {
 			return fmt.Errorf("moving modified %q aside: %w", st.loc, err)
 		}
 		s.pruneStore(st.loc)
-		s.Warn("%s was modified after activation; preserved as %s", st.loc, aside)
+		s.Warn("%s was modified after activation; preserved as %s%s", st.loc, aside, note)
 		s.crashPoint()
 	}
 
@@ -643,6 +676,11 @@ func (s *Stacker) Rename(oldName, newName, oldDir, newDir string, activeStack []
 				return err
 			}
 		}
+	}
+
+	// Whatever backups/<old>/ held has moved; drop the directory if it is empty.
+	if os.Remove(filepath.Join(s.backupsDir(), oldName)) == nil {
+		_ = atomicfile.SyncDir(s.backupsDir())
 	}
 
 	l.Module = newName

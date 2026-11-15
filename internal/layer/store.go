@@ -22,11 +22,7 @@ func (s *Stacker) foreignDir() string { return filepath.Join(s.StateDir, "foreig
 // storePath mirrors host below dir. A host outside Target (a ledger moved
 // from another root) keeps its absolute path below dir rather than escaping it.
 func (s *Stacker) storePath(dir, host string) string {
-	rel, err := filepath.Rel(s.Target, host)
-	if err != nil || !filepath.IsLocal(rel) {
-		rel = strings.TrimLeft(filepath.Clean(host), string(filepath.Separator))
-	}
-	return filepath.Join(dir, rel)
+	return filepath.Join(dir, strings.TrimLeft(s.relTarget(host), string(filepath.Separator)))
 }
 
 // backupPath is where the file displaced from host is kept for tag: "orig"
@@ -58,12 +54,13 @@ func moveIn(from, to string) error {
 	return moveDurable(from, to)
 }
 
-// mkdirAllDurable creates dir and its missing parents, then fsyncs the
+// mkdirAllDurable creates dir and its missing parents, readable by their owner
+// only (the store holds copies of files that may be private), then fsyncs the
 // directory that gained each of them: a file moved into dir is lost with
 // its directory if the directory's own entry never reached the disk.
 func mkdirAllDurable(dir string) error {
 	missing := missingDirs(dir)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("creating %q: %w", dir, err)
 	}
 	for _, d := range missing {
@@ -94,4 +91,13 @@ func (s *Stacker) pruneStore(path string) {
 		}
 		_ = atomicfile.SyncDir(filepath.Dir(dir))
 	}
+}
+
+// relTarget is host below Target, or host itself if it lies outside.
+func (s *Stacker) relTarget(host string) string {
+	rel, err := filepath.Rel(s.Target, host)
+	if err != nil || !filepath.IsLocal(rel) {
+		return host
+	}
+	return rel
 }

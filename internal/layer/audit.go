@@ -35,6 +35,8 @@ func (s *Stacker) Audit(module string, activeStack []string) ([]string, error) {
 		deployed[e.Src] = true
 		st := planStep(l, i, above)
 		switch {
+		case st.duplicate:
+			findings = append(findings, fmt.Sprintf("%s: an interrupted move left %s as a duplicate of the file there (turning the module off removes it)", e.Host, e.Backup))
 		case st.foreign:
 			findings = append(findings, fmt.Sprintf("%s was modified after activation (teardown will require -f)", st.loc))
 		case !st.remove && !st.finished:
