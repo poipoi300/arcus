@@ -10,7 +10,7 @@ The project is in early development: until 1.0, commands and file formats may st
 
 ## Features
 
-* **Layered modules**: modules stack in order, the later one wins a shared file, and any module can be turned off in any order with the files below it restored byte for byte.
+* **Layered modules**: modules stack in order, the later one wins a shared file, and any module can be turned off in any order with the files below it restored byte for byte. The files a module replaces are kept in arcus's state directory, not next to them.
 * **Profiles**: a profile such as `laptop` lists the modules a kind of machine gets; the machine's host file picks profiles and adds its own modules on top.
 * **Every resource kind is reversible**: turning a module off removes the packages, units, groups and files it brought, whether arcus installed them or took them over (packages it takes over are marked explicitly installed, like the ones it installs), but never ones another module still wants or that are protected. A package another installed package still needs stays, marked as a dependency, so pacman removes it with the last package that needs it.
 * **Same result on any machine**: a machine set up by hand ends up like a fresh install of the same profile after `arcus machine`, `apply` and `clean`.
@@ -21,6 +21,7 @@ The project is in early development: until 1.0, commands and file formats may st
 * **Plan, then act**: every change is shown before it runs, including diffs of changed system files.
 * **Least privilege**: arcus runs as you and asks sudo only for root steps; the root side refuses unless it recomputes exactly the steps you confirmed.
 * **Crash-safe**: a write-ahead ledger is fsynced before every file change, Ctrl-C rolls back cleanly, and `arcus doctor -fix` repairs what a power loss leaves behind.
+* **History**: the state directory is a git repository, and every command that changes it commits the host file, state, ledgers and the files arcus set aside, so `arcus history` shows what changed and `arcus rollback` goes back. Without `git` on PATH nothing is recorded.
 * **Plain files**: modules, profiles and the host file are TOML with comments; state is readable JSON.
 * **Config apart from state**: modules and profiles can live in a dotfiles repository; what a machine has on stays on the machine.
 * **Static binaries**: pure Go, no CGO; `arcus` needs only the standard library and one TOML parser.
@@ -70,6 +71,8 @@ arcus doctor               # check state, ledgers and deployed files; list what 
 arcus clean                # remove packages no module lists (shows its plan, asks first)
 arcus rebuild dwm-arcus    # rebuild an own build whose recipe didn't change
 arcus machine              # write this machine's module: kernel, bootloader, filesystems, swap
+arcus history              # what changed in the state directory, newest first (-n N, -system)
+arcus rollback a1b2c3d     # put the host file back as of that revision and apply it
 arcus update               # replace arcus with the latest release
 ```
 
@@ -112,13 +115,19 @@ modules  = ["aurora"]
 
 `arcus on` and `arcus off` take a module or a profile, edit those two lists and leave the rest of the file as you wrote it. The host file is state: it stays on the machine, so turning modules on and off never changes a shared dotfiles repository. Before 0.2.0 it was `~/.config/arcus/hosts/<hostname>.toml`; until it is moved, arcus refuses to run and prints the command that moves it.
 
+### State and history
+
+Each half keeps its state in a directory: `~/.local/state/arcus` for the user half and `/var/lib/arcus` for the system half. Besides the host file, state and ledgers, it holds `backups/<tag>/<path>`, the files a module replaced (`<tag>` is `orig` for your own file, or the module whose file it was), and `foreign/<path>`, files edited since deployment that `-f` moved aside. Both mirror the path below `$HOME` or `/`, and nothing is left beside the original. Turning the module off puts a backup back. Backups that older versions left next to the file (`.bashrc.orig`) are still restored the same way.
+
+The directory is a git repository (created on the first change; arcus needs `git` for it). After each command that changes state, arcus commits it with the command as the message, so the history shows which modules were on when, and keeps the replaced files. The system half's repository is readable by root only: `arcus history -system` asks sudo. `arcus rollback <rev>` restores the host file of the user half as of a revision from `arcus history`, shows the difference, and then does what `arcus apply` does, with the same confirmation and `-y`, `-n` and `-f`; if you decline, the host file stays as it is.
+
 ### Configuration
 
 | Variable | Flag | Default | Description |
 |----------|------|---------|-------------|
 | | `-y` | off | Don't ask for confirmation |
 | | `-n` | off | Only show the plan |
-| | `-f` | off | `off`: also turn off modules that require it; `off`, `apply`: move files edited since deployment aside to `<path>.arcus-foreign` |
+| | `-f` | off | `off`: also turn off modules that require it; `off`, `apply`, `rollback`: move files edited since deployment aside to `foreign/` in the state directory (see State and history) |
 | | `-fix` | off | `doctor`: apply the safe repairs |
 | | `-yes` | off | `arcus-install run`: don't ask to type the device name |
 | | `-version` | | Print the version (both binaries) |
