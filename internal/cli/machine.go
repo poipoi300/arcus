@@ -54,7 +54,8 @@ func (a *app) cmdMachine(args []string) error {
 	if !o.yes && !a.confirm("Proceed?") {
 		return errors.New("cancelled, nothing was changed")
 	}
-	if err := a.sudo([]string{"-machine", "-hash", facts.Hash(), "-home", a.paths.Home, "-config", a.paths.Config}); err != nil {
+	a.changing = true
+	if err := a.asRoot([]string{"-machine", "-hash", facts.Hash(), "-home", a.paths.Home, "-config", a.paths.Config}); err != nil {
 		return fmt.Errorf("writing the machine module: %w", err)
 	}
 	fmt.Fprintln(a.stdout, a.machineHint())

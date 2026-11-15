@@ -212,6 +212,7 @@ func (a *app) change(o *opts, create bool, edit func(*host.File) error) error {
 	if o.dry {
 		return nil
 	}
+	a.changing = true
 
 	if len(steps) > 0 {
 		if !o.yes && !a.confirm("Proceed?") {
@@ -654,7 +655,7 @@ func (a *app) execute(steps []plan.Step, in plan.Input, o *opts) error {
 				args = append(args, "-f")
 			}
 			args = append(append(args, "--"), in.Desired...)
-			if err := a.sudo(args); err != nil {
+			if err := a.asRoot(args); err != nil {
 				return fmt.Errorf("%s steps failed: %w", stage.Name(), err)
 			}
 			continue

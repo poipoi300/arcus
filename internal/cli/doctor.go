@@ -59,6 +59,7 @@ func (a *app) cmdDoctor(args []string) error {
 	if err := a.load(&o); err != nil {
 		return err
 	}
+	a.changing = o.fix
 	uh := a.userHalf()
 	lock, err := uh.lock(o.fix)
 	if err != nil {
@@ -95,7 +96,7 @@ func (a *app) cmdDoctor(args []string) error {
 	}()
 	r.issues += sr.issues
 	if o.fix && sr.issues > 0 {
-		err := a.sudo([]string{"-doctor", "-home", a.paths.Home, "-config", a.paths.Config})
+		err := a.asRoot([]string{"-doctor", "-home", a.paths.Home, "-config", a.paths.Config})
 		if err == nil {
 			r.fixed += sr.issues
 		} else {
@@ -110,6 +111,7 @@ func (a *app) cmdDoctor(args []string) error {
 	fmt.Fprintln(a.stdout, "Machine:")
 	a.doctorMachine(&o, r)
 	a.doctorVersion(r)
+	a.doctorHistory(r)
 
 	switch {
 	case r.issues == 0:
