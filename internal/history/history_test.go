@@ -100,3 +100,40 @@ func TestWithoutGitNothingHappens(t *testing.T) {
 		t.Errorf("Log without git: %v", err)
 	}
 }
+
+// Backups mirror the user's files, whatever they are called.
+func TestBackedUpGitFilesDoNotChangeWhatIsStored(t *testing.T) {
+	needGit(t)
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "backups", "orig", ".gitignore"), "*\n")
+	write(t, filepath.Join(dir, "backups", "orig", ".gitattributes"), "* text eol=crlf\n")
+	write(t, filepath.Join(dir, "backups", "orig", "x"), "a\nb\n")
+	if err := Commit(dir, "backups"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Show(dir, "HEAD", "backups/orig/x")
+	if err != nil || string(got) != "a\nb\n" {
+		t.Errorf("stored %q, %v", got, err)
+	}
+	if files, _ := git(dir, "ls-files"); !strings.Contains(string(files), "backups/orig/x") {
+		t.Errorf("tracked: %s", files)
+	}
+}
+
+// A repository a crash left without its identity or ignore file is finished.
+func TestInitFinishesAHalfMadeRepository(t *testing.T) {
+	needGit(t)
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	if _, err := git(dir, "init", "-q"); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(dir, "host.toml"), "x")
+	if err := Commit(dir, "recover"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".gitignore")); err != nil {
+		t.Error("the ignore file was not written")
+	}
+}

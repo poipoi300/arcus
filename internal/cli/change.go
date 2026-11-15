@@ -212,12 +212,12 @@ func (a *app) change(o *opts, create bool, edit func(*host.File) error) error {
 	if o.dry {
 		return nil
 	}
-	a.changing = true
 
 	if len(steps) > 0 {
 		if !o.yes && !a.confirm("Proceed?") {
 			return errors.New("cancelled, nothing was changed")
 		}
+		a.changing = true
 		if err := a.execute(steps, in, o); err != nil {
 			return err
 		}
@@ -226,6 +226,7 @@ func (a *app) change(o *opts, create bool, edit func(*host.File) error) error {
 		fmt.Fprintln(a.stdout, "Done.")
 	}
 	if !slices.Equal(beforeProfiles, f.Profiles) || !slices.Equal(beforeModules, f.Modules) {
+		a.changing = true
 		if err := f.Save(); err != nil {
 			return err
 		}
