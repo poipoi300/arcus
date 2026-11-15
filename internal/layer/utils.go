@@ -219,8 +219,9 @@ func symlinkReplace(target, link string) error {
 //     situation, and the duplicate at the destination shows up as a foreign
 //     file (-f moves it aside) or is one more file in foreign/.
 //
-// A temp file left by a crash ends in ".arcus-tmp" and, in the backup store,
-// shows up in doctor as a backup no ledger references.
+// A temp file left by a crash ends in ".arcus-tmp" next to its destination. In
+// the backup store doctor reports it as a backup no ledger references; next to
+// a host path it is a harmless stray.
 func moveDurable(from, to string) error {
 	err := renameDurable(from, to)
 	if !errors.Is(err, syscall.EXDEV) {

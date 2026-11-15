@@ -35,17 +35,30 @@ func Available() bool {
 	return err == nil
 }
 
-// git runs git in dir. safe.directory lets root read a user's repository and
-// the user the system half's, which differ in owner; hooks never run, and
-// GIT_DIR and friends from the caller's environment never redirect it.
+// attributes switch off every conversion git could apply to what it stores,
+// whatever a backed-up .gitattributes asks for: the history must hold the
+// bytes arcus set aside.
+const attributes = "* -text -ident -filter -working-tree-encoding\n"
+
+// git runs git in dir with nothing but the repository's own configuration.
+// The system half runs as root, and under sudo the user's HOME and GIT_*
+// variables may still be set: a user's gitconfig (core.fsmonitor, filters)
+// would run commands as root and could change what is stored. So HOME points
+// at the state directory, which holds no gitconfig, and no GIT_* variable passes. safe.directory lets
+// root read a user's repository and the user the system half's, which differ
+// in owner; hooks never run.
 func git(dir string, args ...string) ([]byte, error) {
-	cmd := exec.Command("git", append([]string{"-C", dir, "-c", "safe.directory=" + dir, "-c", "core.hooksPath=/dev/null"}, args...)...)
+	cmd := exec.Command("git", append([]string{
+		"-C", dir, "-c", "safe.directory=" + dir, "-c", "core.hooksPath=/dev/null",
+		"-c", "core.fsmonitor=false", "-c", "core.autocrlf=false",
+		"-c", "core.excludesFile=/dev/null", "-c", "core.attributesFile=/dev/null",
+	}, args...)...)
 	for _, kv := range os.Environ() {
-		if !strings.HasPrefix(kv, "GIT_DIR=") && !strings.HasPrefix(kv, "GIT_WORK_TREE=") && !strings.HasPrefix(kv, "GIT_INDEX_FILE=") {
+		if !strings.HasPrefix(kv, "GIT_") && !strings.HasPrefix(kv, "HOME=") && !strings.HasPrefix(kv, "XDG_CONFIG_HOME=") {
 			cmd.Env = append(cmd.Env, kv)
 		}
 	}
-	cmd.Env = append(cmd.Env, "GIT_TERMINAL_PROMPT=0")
+	cmd.Env = append(cmd.Env, "HOME="+dir, "GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0")
 	out, err := cmd.Output()
 	if err != nil {
 		var exit *exec.ExitError
@@ -57,27 +70,30 @@ func git(dir string, args ...string) ([]byte, error) {
 	return out, nil
 }
 
-// Init makes dir a repository if it isn't one: ignoring the lock and temp
-// files, committing as arcus whoever runs it (root or a user without a git
-// identity), never signing, and readable by its owner only. The last matters
-// for the system half, whose backups may be files only root may read; git
-// stores their content with the default, world-readable modes.
+// Init makes dir a repository if it isn't one, and finishes one that a crash
+// left half made: ignoring the lock and temp files, committing as arcus
+// whoever runs it (root or a user without a git identity), never signing, and
+// readable by its owner only. The last matters for the system half, whose
+// backups may be files only root may read; git stores their content with the
+// default, world-readable modes. The .gitignore comes last, as the mark that
+// the rest is in place.
 func Init(dir string) error {
 	if !Available() {
 		return nil
 	}
-	if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
-		return nil
+	_, err := os.Stat(filepath.Join(dir, ".gitignore"))
+	if err == nil {
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			return nil
+		}
 	} else if !errors.Is(err, iofs.ErrNotExist) {
 		return err
 	}
 	if _, err := git(dir, "init", "-q"); err != nil {
 		return err
 	}
-	if err := os.Chmod(filepath.Join(dir, ".git"), 0o700); err != nil {
-		return err
-	}
-	if err := atomicfile.Write(filepath.Join(dir, ".gitignore"), []byte(ignore), 0o644); err != nil {
+	gitDir := filepath.Join(dir, ".git")
+	if err := os.Chmod(gitDir, 0o700); err != nil {
 		return err
 	}
 	for _, kv := range [][2]string{{"user.name", "arcus"}, {"user.email", "arcus@localhost"}, {"commit.gpgsign", "false"}} {
@@ -85,7 +101,10 @@ func Init(dir string) error {
 			return err
 		}
 	}
-	return nil
+	if err := atomicfile.Write(filepath.Join(gitDir, "info", "attributes"), []byte(attributes), 0o600); err != nil {
+		return err
+	}
+	return atomicfile.Write(filepath.Join(dir, ".gitignore"), []byte(ignore), 0o644)
 }
 
 // Commit records whatever changed in dir since the last commit under
@@ -105,7 +124,10 @@ func Commit(dir, message string) error {
 	if err := Init(dir); err != nil {
 		return err
 	}
-	if _, err := git(dir, "add", "-A"); err != nil {
+	// Backups mirror the user's files, so they may hold .gitignore files of
+	// their own: -f ignores every ignore file, and the pathspecs exclude what
+	// .gitignore at the top lists.
+	if _, err := git(dir, "add", "-A", "-f", "--", ".", ":(exclude).lock", ":(exclude,glob)**/.*.tmp", ":(exclude,glob)**/*.arcus-tmp"); err != nil {
 		return err
 	}
 	// Exit status 1 means there is something staged.
@@ -117,7 +139,8 @@ func Commit(dir, message string) error {
 	if !errors.As(err, &exit) || exit.ExitCode() != 1 {
 		return err
 	}
-	_, err = git(dir, "commit", "-q", "--no-verify", "-m", message)
+	_, err = git(dir, "-c", "user.name=arcus", "-c", "user.email=arcus@localhost", "-c", "commit.gpgsign=false",
+		"commit", "-q", "--no-verify", "-m", message)
 	return err
 }
 
