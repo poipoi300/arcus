@@ -88,10 +88,11 @@ func attrDrift(e Entry, loc string) string {
 	return ""
 }
 
-// DanglingBackups looks next to every host path any known module can deploy
-// for files named <path>.orig, <path>.<module> or <path>.<tag>.<N> that no
-// ledger references. These are leftovers of crashes. The scan is bounded to
-// those paths; it never crawls the target.
+// DanglingBackups lists the files in the backup store that no ledger
+// references, and looks next to every host path any known module can deploy
+// for the sidecar files older versions left: <path>.orig, <path>.<module> or
+// <path>.<tag>.<N>. These are leftovers of crashes. The sidecar scan is
+// bounded to those paths; it never crawls the target.
 func (s *Stacker) DanglingBackups() ([]string, error) {
 	tags := map[string]bool{"orig": true}
 	modules := make([]string, 0, len(s.Dirs))
@@ -143,6 +144,21 @@ func (s *Stacker) DanglingBackups() ([]string, error) {
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return nil, err
 		}
+	}
+
+	// Backups in the store are all arcus's own: any that no ledger names
+	// were left by a crash.
+	err = filepath.WalkDir(s.backupsDir(), func(p string, d iofs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		if !referenced[p] {
+			dangling = append(dangling, p)
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
 	}
 	return dangling, nil
 }

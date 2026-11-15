@@ -195,7 +195,7 @@ func (s *Stacker) Activate(ctx context.Context, module string, activeStack []str
 			}
 		}
 		if e.Backup != "" {
-			if err := renameDurable(e.Host, e.Backup); err != nil {
+			if err := moveIn(e.Host, e.Backup); err != nil {
 				return fmt.Errorf("backing up %q to %q: %w", e.Host, e.Backup, err)
 			}
 			s.crashPoint()
@@ -345,7 +345,7 @@ func (s *Stacker) planActivation(module string, below []*Ledger, checkAccess boo
 				problems = append(problems, fmt.Sprintf("%s: module provides a file but the host has a directory", host))
 				return nil
 			}
-			e.Backup = uniquePath(host + "." + ownerTag(host, below))
+			e.Backup = uniquePath(s.backupPath(host, ownerTag(host, below)))
 		}
 		plan = append(plan, e)
 		return nil
@@ -427,7 +427,7 @@ func planStep(l *Ledger, idx int, above []*Ledger) step {
 
 // Deactivate removes module's layer. activeStack is the full current stack
 // (containing module). In force mode, files that were modified after
-// activation are moved aside to <path>.arcus-foreign[.N] instead of blocking;
+// activation are moved aside to <StateDir>/foreign/<path>[.N] instead of blocking;
 // arcus never deletes data it did not create.
 func (s *Stacker) Deactivate(ctx context.Context, module string, activeStack []string, force bool) error {
 	pos := slices.Index(activeStack, module)
@@ -493,12 +493,14 @@ func (s *Stacker) teardownEntry(l *Ledger, idx int, above []*Ledger) error {
 		if err := removeDurable(st.loc); err != nil {
 			return fmt.Errorf("removing %q: %w", st.loc, err)
 		}
+		s.pruneStore(st.loc)
 		s.crashPoint()
 	case st.foreign:
-		aside := uniquePath(st.loc + ".arcus-foreign")
-		if err := renameDurable(st.loc, aside); err != nil {
+		aside := uniquePath(s.storePath(s.foreignDir(), e.Host))
+		if err := moveIn(st.loc, aside); err != nil {
 			return fmt.Errorf("moving modified %q aside: %w", st.loc, err)
 		}
+		s.pruneStore(st.loc)
 		s.Warn("%s was modified after activation; preserved as %s", st.loc, aside)
 		s.crashPoint()
 	}
@@ -513,9 +515,10 @@ func (s *Stacker) teardownEntry(l *Ledger, idx int, above []*Ledger) error {
 		if exists(e.Host) {
 			return fmt.Errorf("cannot restore %q: %q is occupied", e.Backup, e.Host)
 		}
-		if err := renameDurable(e.Backup, e.Host); err != nil {
+		if err := moveDurable(e.Backup, e.Host); err != nil {
 			return fmt.Errorf("restoring %q to %q: %w", e.Backup, e.Host, err)
 		}
+		s.pruneStore(e.Backup)
 	}
 	return nil
 }
@@ -617,15 +620,21 @@ func (s *Stacker) Rename(oldName, newName, oldDir, newDir string, activeStack []
 		dirty := false
 		for i := range other.Entries {
 			e := &other.Entries[i]
-			// Only ".<old>" or ".<old>.<N>".
-			if tag, ok := strings.CutPrefix(e.Backup, e.Host+"."); !ok || backupTag(tag) != oldName {
+			// Either backups/<old>/... in the store, or the sidecar form
+			// older versions left: ".<old>" or ".<old>.<N>" next to the host.
+			var fresh string
+			if tag, ok := strings.CutPrefix(e.Backup, e.Host+"."); s.BackupTag(e.Backup) == oldName {
+				fresh = uniquePath(s.backupPath(e.Host, newName))
+			} else if ok && backupTag(tag) == oldName {
+				fresh = uniquePath(e.Host + "." + newName)
+			} else {
 				continue
 			}
-			fresh := uniquePath(e.Host + "." + newName)
 			if exists(e.Backup) {
-				if err := renameDurable(e.Backup, fresh); err != nil {
+				if err := moveIn(e.Backup, fresh); err != nil {
 					return fmt.Errorf("renaming backup %q: %w", e.Backup, err)
 				}
+				s.pruneStore(e.Backup)
 			}
 			e.Backup, dirty = fresh, true
 		}
