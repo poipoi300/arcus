@@ -90,8 +90,11 @@ func TestStateChangesAreRecordedPerHalf(t *testing.T) {
 	if got := e.commits(e.systemState()); got[0] != "off -f -y p" || len(got) != 2 {
 		t.Errorf("system commits = %q", got)
 	}
-	if system := gitFiles(t, e.systemState()); !slices.Contains(system, "foreign/etc/p.conf") || slices.Contains(system, "backups/orig/etc/p.conf") {
-		t.Errorf("system history after off -f: %v", system)
+	if system := gitFiles(t, e.systemState()); slices.Contains(system, "foreign/etc/p.conf") || slices.Contains(system, "backups/orig/etc/p.conf") {
+		t.Errorf("system history after off -f: %v (foreign/ is not tracked)", system)
+	}
+	if e.read("var/lib/arcus/foreign/etc/p.conf") != "BBBB" {
+		t.Error("the foreign file is gone from disk")
 	}
 }
 
@@ -161,13 +164,16 @@ func TestRollbackRestoresTheHostFile(t *testing.T) {
 	if err := e.app("n\n").run([]string{"rollback", rev}); err == nil || !strings.Contains(err.Error(), "cancelled") {
 		t.Fatalf("declined rollback: %v", err)
 	}
-	if !strings.Contains(e.out.String(), "-   \"q\",") {
+	if !strings.Contains(e.out.String(), "- module q") {
 		t.Errorf("no diff shown:\n%s", e.out.String())
 	}
 	if !slices.Equal(e.hostModules(), []string{"p", "q"}) || e.read("home/u/.inputrc") == "<missing>" {
 		t.Fatal("a declined rollback changed something")
 	}
 
+	data, err := os.ReadFile(e.hostPath())
+	must(t, err)
+	must(t, os.WriteFile(e.hostPath(), append(data, "# edited by hand\n"...), 0o644))
 	e.out.Reset()
 	must(t, e.app("y\n").run([]string{"rollback", rev}))
 	if !slices.Equal(e.hostModules(), []string{"p"}) {
@@ -176,8 +182,11 @@ func TestRollbackRestoresTheHostFile(t *testing.T) {
 	if _, err := os.Lstat(filepath.Join(e.home, ".inputrc")); err == nil {
 		t.Error("q is still deployed")
 	}
-	if got := e.commits(e.userState()); got[0] != "rollback "+rev {
+	if got := e.commits(e.userState()); got[0] != "rollback "+rev || got[1] != "before rollback "+rev {
 		t.Errorf("commits = %q", got)
+	}
+	if kept, err := history.Show(e.userState(), e.rev(e.userState(), "before rollback "+rev), "host.toml"); err != nil || !strings.Contains(string(kept), "edited by hand") {
+		t.Errorf("the hand edit was not recorded: %q, %v", kept, err)
 	}
 
 	if err := e.run("rollback", "nonsense"); err == nil || !strings.Contains(err.Error(), "not a revision") {
