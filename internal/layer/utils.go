@@ -205,33 +205,52 @@ func symlinkReplace(target, link string) error {
 // Backups and moved-aside files live in the state directory, which can be on
 // another filesystem than the host path (/etc and a separate /var), where
 // rename fails with EXDEV; then the file is copied and the original removed.
+// A copy keeps content, mode, owner and mtime but not extended attributes,
+// ACLs or capabilities, and a hard link becomes a plain file. Directories and
+// special files can't be copied (errCannotCopy).
 //
 // A crash can leave both copies, never neither: the destination only appears
 // by an atomic rename of a fully written, fsynced temp file, and the
-// original is removed only after that rename and its directory fsync. With
-// both there, no step loses data:
-//   - activation: planStep finds the host's file where a deployment should be
-//     and, unless that is byte-identical to a copy deployment (which is
-//     removed, the identical backup restored), calls it foreign. Deactivate
-//     refuses without -f, Rollback leaves it in place, and doctor reports it.
-//   - restoring a backup or moving a file aside: the entry is still in the
-//     ledger and the source still exists, so the next run sees the same
-//     situation, and the duplicate at the destination shows up as a foreign
-//     file (-f moves it aside) or is one more file in foreign/.
+// original is removed only after that rename and its directory fsync. Both
+// copies are identical, which planStep recognises as an interrupted move:
+//   - activation (host to backups/): the host still holds the original and
+//     the backup duplicates it. Rollback removes the duplicate; nothing was
+//     deployed yet.
+//   - teardown (backups/ to host): the host already holds the restored
+//     original and the backup duplicates it. Re-running removes the duplicate.
+//   - moving a foreign file aside: the source is still in place and the next
+//     run moves it again, to the next free name; one more file in foreign/.
 //
 // A temp file left by a crash ends in ".arcus-tmp" next to its destination. In
 // the backup store doctor reports it as a backup no ledger references; next to
 // a host path it is a harmless stray.
 func moveDurable(from, to string) error {
-	err := renameDurable(from, to)
+	err := error(syscall.EXDEV)
+	if !forceExdev {
+		err = renameDurable(from, to)
+	}
 	if !errors.Is(err, syscall.EXDEV) {
 		return err
 	}
 	if err := copyDurable(from, to); err != nil {
 		return fmt.Errorf("copying %q across filesystems: %w", from, err)
 	}
+	if afterCopy != nil {
+		afterCopy()
+	}
 	return removeDurable(from)
 }
+
+// Test seams: forceExdev makes every move take the copy path, and afterCopy
+// runs between the copy appearing and the source going, where tests crash.
+var (
+	forceExdev bool
+	afterCopy  func()
+)
+
+// errCannotCopy is returned for what a copy across filesystems can't carry:
+// anything but a regular file or a symlink.
+var errCannotCopy = errors.New("cannot be copied across filesystems")
 
 // copyDurable writes a copy of from at to, keeping a regular file's content,
 // mode, owner and mtime or recreating a symlink, and fsyncs it. Anything else
@@ -248,7 +267,7 @@ func copyDurable(from, to string) error {
 	case info.Mode().IsRegular():
 		err = copyFile(from, tmp, info)
 	default:
-		err = fmt.Errorf("%s is neither a regular file nor a symlink", from)
+		err = fmt.Errorf("%s is neither a regular file nor a symlink: %w", from, errCannotCopy)
 	}
 	if err == nil {
 		err = os.Rename(tmp, to)
@@ -304,4 +323,28 @@ func copyFile(from, tmp string, info os.FileInfo) error {
 		return err
 	}
 	return dst.Close()
+}
+
+// identical reports whether a and b are the same file or symlink: the same
+// link target, or a regular file with the same content and permissions.
+func identical(a, b string) bool {
+	ia, errA := os.Lstat(a)
+	ib, errB := os.Lstat(b)
+	if errA != nil || errB != nil {
+		return false
+	}
+	switch {
+	case ia.Mode()&os.ModeSymlink != 0 && ib.Mode()&os.ModeSymlink != 0:
+		ta, errA := os.Readlink(a)
+		tb, errB := os.Readlink(b)
+		return errA == nil && errB == nil && ta == tb
+	case ia.Mode().IsRegular() && ib.Mode().IsRegular():
+		if ia.Mode().Perm() != ib.Mode().Perm() {
+			return false
+		}
+		sa, errA := hashFile(a)
+		sb, errB := hashFile(b)
+		return errA == nil && errB == nil && sa == sb
+	}
+	return false
 }
