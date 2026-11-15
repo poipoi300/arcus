@@ -32,6 +32,7 @@ func TestCommitRecordsChangesOnly(t *testing.T) {
 	write(t, filepath.Join(dir, ".lock"), "")
 	write(t, filepath.Join(dir, "ledger", ".a.json.123.tmp"), "torn")
 	write(t, filepath.Join(dir, "backups", "orig", "f.arcus-tmp"), "partial")
+	write(t, filepath.Join(dir, "foreign", "etc", "mine"), "kept on disk only")
 
 	if err := Commit(dir, "on a"); err != nil {
 		t.Fatal(err)

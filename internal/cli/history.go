@@ -3,9 +3,8 @@ package cli
 import (
 	"errors"
 	"fmt"
-	iofs "io/fs"
-	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 
 	"github.com/grunclepug/arcus/internal/history"
@@ -66,33 +65,63 @@ func (a *app) cmdRollback(args []string) error {
 	if err := a.load(&o); err != nil {
 		return err
 	}
-	data, err := history.Show(a.userHalf().dir, rev, filepath.Base(a.paths.HostFile()))
-	if err != nil {
-		return err
-	}
 
 	// change saves the host file only after the steps ran, so declining the
-	// plan, or a failure, leaves the current one untouched.
+	// plan, or a failure, leaves the current one untouched. The edit runs
+	// under the user lock, so the revision is read, and what is pending
+	// recorded, with no other arcus changing the state.
 	return a.change(&o, true, func(f *host.File) error {
+		data, err := history.Show(a.userHalf().dir, rev, filepath.Base(f.Path))
+		if err != nil {
+			return err
+		}
 		old, err := host.Parse(f.Path, data)
 		if err != nil {
 			return fmt.Errorf("the host file at %s: %w", rev, err)
 		}
-		current, err := os.ReadFile(f.Path)
-		if err != nil && !errors.Is(err, iofs.ErrNotExist) {
-			return err
-		}
-		if diff := lineDiff(string(current), string(data)); string(current) == string(data) {
-			fmt.Fprintf(a.stdout, "The host file is already as it was at %s.\n", rev)
-		} else {
-			fmt.Fprintf(a.stdout, "Host file %s, as of %s:\n", f.Path, rev)
-			for _, line := range diff {
-				fmt.Fprintf(a.stdout, "        %s\n", line)
+		// Edits made by hand since the last command are recoverable.
+		if !o.dry {
+			if err := history.Commit(a.userHalf().dir, "before rollback "+rev); err != nil {
+				fmt.Fprintf(a.stderr, "warning: recording the state history: %v\n", err)
 			}
 		}
+		a.printHostChanges(f, old, rev)
 		f.Profiles, f.Modules = old.Profiles, old.Modules
 		return nil
 	})
+}
+
+// printHostChanges shows what putting the host file's lists back as of rev
+// changes: entries it would drop ("-") and bring back ("+").
+func (a *app) printHostChanges(now, old *host.File, rev string) {
+	var lines []string
+	for _, l := range []struct {
+		kind     string
+		now, old []string
+	}{{"profile", now.Profiles, old.Profiles}, {"module", now.Modules, old.Modules}} {
+		before := len(lines)
+		for _, name := range l.now {
+			if !slices.Contains(l.old, name) {
+				lines = append(lines, fmt.Sprintf("- %s %s", l.kind, name))
+			}
+		}
+		for _, name := range l.old {
+			if !slices.Contains(l.now, name) {
+				lines = append(lines, fmt.Sprintf("+ %s %s", l.kind, name))
+			}
+		}
+		if len(lines) == before && !slices.Equal(l.now, l.old) {
+			lines = append(lines, fmt.Sprintf("~ %ss are listed in another order", l.kind))
+		}
+	}
+	if len(lines) == 0 {
+		fmt.Fprintf(a.stdout, "The host file already lists what it did at %s.\n", rev)
+		return
+	}
+	fmt.Fprintf(a.stdout, "Host file %s, as of %s:\n", now.Path, rev)
+	for _, line := range lines {
+		fmt.Fprintf(a.stdout, "        %s\n", line)
+	}
 }
 
 // doctorHistory notes that nothing is recorded without git.

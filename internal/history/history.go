@@ -23,10 +23,13 @@ var ErrNoGit = errors.New("git not found: state history is off")
 
 // ignore lists what a state directory holds that isn't state: the lock file,
 // the temp files atomicfile.Write leaves if it dies (.<name>.<random>.tmp),
-// and the temp copies of a move across filesystems (<name>.arcus-tmp).
+// the temp copies of a move across filesystems (<name>.arcus-tmp), and foreign/:
+// the files -f set aside stay on disk where the warning points, but git would
+// keep their content for good.
 const ignore = `.lock
 .*.tmp
 *.arcus-tmp
+/foreign/
 `
 
 // Available reports whether git is on PATH.
@@ -127,7 +130,7 @@ func Commit(dir, message string) error {
 	// Backups mirror the user's files, so they may hold .gitignore files of
 	// their own: -f ignores every ignore file, and the pathspecs exclude what
 	// .gitignore at the top lists.
-	if _, err := git(dir, "add", "-A", "-f", "--", ".", ":(exclude).lock", ":(exclude,glob)**/.*.tmp", ":(exclude,glob)**/*.arcus-tmp"); err != nil {
+	if _, err := git(dir, "add", "-A", "-f", "--", ".", ":(exclude).lock", ":(exclude)foreign", ":(exclude,glob)**/.*.tmp", ":(exclude,glob)**/*.arcus-tmp"); err != nil {
 		return err
 	}
 	// Exit status 1 means there is something staged.
