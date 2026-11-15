@@ -171,7 +171,7 @@ func TestSingleLayerRoundTrip(t *testing.T) {
 		if got := sb.read("foot/foot.ini"); got != "from A" {
 			t.Fatalf("foot.ini = %q", got)
 		}
-		if got := sb.read("foot/foot.ini.orig"); got != "host original" {
+		if got := sb.stored("backups/orig/etc/foot/foot.ini"); got != "host original" {
 			t.Fatalf("backup = %q", got)
 		}
 
@@ -329,7 +329,7 @@ func TestPreexistingOrigFileIsNotConfused(t *testing.T) {
 }
 
 // A file edited after deployment blocks teardown; -f moves it to
-// <path>.arcus-foreign and never deletes it. For the system half this is also
+// <StateDir>/foreign/<path> and never deletes it. For the system half this is also
 // "a changed hash blocks teardown" (same-size edit).
 func TestForeignModificationIsProtected(t *testing.T) {
 	eachHalf(t, func(t *testing.T, sb *sandbox) {
@@ -345,7 +345,7 @@ func TestForeignModificationIsProtected(t *testing.T) {
 		if !errors.Is(err, ErrForeign) {
 			t.Fatalf("want ErrForeign, got %v", err)
 		}
-		if sb.read("g.cfg") != "BBBB" || sb.read("g.cfg.orig") != "ORIGINAL" {
+		if sb.read("g.cfg") != "BBBB" || sb.stored("backups/orig/etc/g.cfg") != "ORIGINAL" {
 			t.Fatal("refused teardown must not change anything")
 		}
 
@@ -353,8 +353,8 @@ func TestForeignModificationIsProtected(t *testing.T) {
 		if sb.read("g.cfg") != "ORIGINAL" {
 			t.Errorf("original not restored: %q", sb.read("g.cfg"))
 		}
-		if sb.read("g.cfg.arcus-foreign") != "BBBB" {
-			t.Errorf("user edit not preserved: %q", sb.read("g.cfg.arcus-foreign"))
+		if sb.stored("foreign/etc/g.cfg") != "BBBB" {
+			t.Errorf("user edit not preserved: %q", sb.stored("foreign/etc/g.cfg"))
 		}
 		if len(sb.warns) == 0 {
 			t.Error("moving a file aside must warn")
@@ -472,6 +472,20 @@ func (sb *sandbox) assertLedgerCovers(before, pristine map[string]string) {
 			sb.t.Errorf("%s changed (%q -> %q) but no ledger describes it", rel, before[rel], v)
 		}
 	}
+	// Backups live in the state directory, outside the snapshot.
+	_ = filepath.WalkDir(sb.s.backupsDir(), func(p string, d iofs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		if info, err := d.Info(); err == nil && info.Mode().IsRegular() {
+			data, _ := os.ReadFile(p)
+			present[fmt.Sprintf("file:%v:%s", info.Mode().Perm(), data)] = true
+			if !known[p] {
+				sb.t.Errorf("backup %s is in no ledger", p)
+			}
+		}
+		return nil
+	})
 	for rel, v := range pristine {
 		if strings.HasPrefix(v, "file:") && !present[v] {
 			sb.t.Errorf("host file %s (%q) was lost", rel, v)
@@ -671,8 +685,8 @@ func TestRenameRelinksAndRetagsBackups(t *testing.T) {
 		must(t, sb.activate("old"))
 		must(t, sb.activate("oldx"))
 		must(t, sb.activate("top"))
-		if sb.read("f.old") != "old" || sb.read("g.oldx") != "oldx" {
-			t.Fatalf("expected backups tagged with owner, got %q, %q", sb.read("f.old"), sb.read("g.oldx"))
+		if sb.stored("backups/old/etc/f") != "old" || sb.stored("backups/oldx/etc/g") != "oldx" {
+			t.Fatalf("expected backups tagged with owner, got %q, %q", sb.stored("backups/old/etc/f"), sb.stored("backups/oldx/etc/g"))
 		}
 
 		oldDir, newDir := sb.s.Dirs["old"], filepath.Join(sb.profDir, "new")
@@ -682,11 +696,11 @@ func TestRenameRelinksAndRetagsBackups(t *testing.T) {
 		must(t, sb.s.Rename("old", "new", oldDir, newDir, sb.stack))
 		sb.stack = []string{"new", "oldx", "top"}
 
-		if sb.read("f.new") != "old" {
-			t.Errorf("backup not retagged / relinked: %q", sb.read("f.new"))
+		if sb.stored("backups/new/etc/f") != "old" {
+			t.Errorf("backup not retagged / relinked: %q", sb.stored("backups/new/etc/f"))
 		}
-		if sb.read("g.oldx") != "oldx" {
-			t.Errorf("unrelated backup g.oldx was touched: %q", sb.read("g.oldx"))
+		if sb.stored("backups/oldx/etc/g") != "oldx" {
+			t.Errorf("unrelated backup g.oldx was touched: %q", sb.stored("backups/oldx/etc/g"))
 		}
 		must(t, sb.deactivate("new", false))
 		must(t, sb.deactivate("top", false))
@@ -708,7 +722,7 @@ func TestDanglingBackupsAndAudit(t *testing.T) {
 			t.Fatalf("dangling = %v", got)
 		}
 
-		must(t, sb.activate("p")) // backs up to f.orig.1
+		must(t, sb.activate("p")) // backs up to backups/orig/etc/f
 		got, _ = sb.s.DanglingBackups()
 		if len(got) != 1 {
 			t.Fatalf("referenced backup reported as dangling: %v", got)

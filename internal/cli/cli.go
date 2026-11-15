@@ -42,7 +42,7 @@ Flags (before the arguments):
   -y              don't ask for confirmation
   -n              only show the plan
   -f              off: also turn off modules that require it; off, apply: move
-                  files edited since deployment aside to <path>.arcus-foreign
+                  files edited since deployment aside to <state dir>/foreign/
 
 arcus runs as your user and asks sudo for the root steps.
 `

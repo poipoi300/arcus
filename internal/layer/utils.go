@@ -200,3 +200,107 @@ func symlinkReplace(target, link string) error {
 	}
 	return nil
 }
+
+// moveDurable moves a file or symlink and fsyncs the directories involved.
+// Backups and moved-aside files live in the state directory, which can be on
+// another filesystem than the host path (/etc and a separate /var), where
+// rename fails with EXDEV; then the file is copied and the original removed.
+//
+// A crash can leave both copies, never neither: the destination only appears
+// by an atomic rename of a fully written, fsynced temp file, and the
+// original is removed only after that rename and its directory fsync. With
+// both there, no step loses data:
+//   - activation: planStep finds the host's file where a deployment should be
+//     and, unless that is byte-identical to a copy deployment (which is
+//     removed, the identical backup restored), calls it foreign. Deactivate
+//     refuses without -f, Rollback leaves it in place, and doctor reports it.
+//   - restoring a backup or moving a file aside: the entry is still in the
+//     ledger and the source still exists, so the next run sees the same
+//     situation, and the duplicate at the destination shows up as a foreign
+//     file (-f moves it aside) or is one more file in foreign/.
+//
+// A temp file left by a crash ends in ".arcus-tmp" and, in the backup store,
+// shows up in doctor as a backup no ledger references.
+func moveDurable(from, to string) error {
+	err := renameDurable(from, to)
+	if !errors.Is(err, syscall.EXDEV) {
+		return err
+	}
+	if err := copyDurable(from, to); err != nil {
+		return fmt.Errorf("copying %q across filesystems: %w", from, err)
+	}
+	return removeDurable(from)
+}
+
+// copyDurable writes a copy of from at to, keeping a regular file's content,
+// mode, owner and mtime or recreating a symlink, and fsyncs it. Anything else
+// is refused. to only ever appears complete.
+func copyDurable(from, to string) error {
+	info, err := os.Lstat(from)
+	if err != nil {
+		return err
+	}
+	tmp := uniquePath(to + ".arcus-tmp")
+	switch {
+	case info.Mode()&os.ModeSymlink != 0:
+		err = copyLink(from, tmp, info)
+	case info.Mode().IsRegular():
+		err = copyFile(from, tmp, info)
+	default:
+		err = fmt.Errorf("%s is neither a regular file nor a symlink", from)
+	}
+	if err == nil {
+		err = os.Rename(tmp, to)
+	}
+	if err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return atomicfile.SyncDir(filepath.Dir(to))
+}
+
+func copyLink(from, tmp string, info os.FileInfo) error {
+	target, err := os.Readlink(from)
+	if err != nil {
+		return err
+	}
+	if err := os.Symlink(target, tmp); err != nil {
+		return err
+	}
+	if st, ok := info.Sys().(*syscall.Stat_t); ok {
+		return os.Lchown(tmp, int(st.Uid), int(st.Gid))
+	}
+	return nil
+}
+
+func copyFile(from, tmp string, info os.FileInfo) error {
+	src, err := os.OpenFile(from, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+	dst, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	defer dst.Close()
+	if _, err := io.Copy(dst, src); err != nil {
+		return err
+	}
+	// Owner before mode: chown clears setuid and setgid.
+	if st, ok := info.Sys().(*syscall.Stat_t); ok {
+		if err := dst.Chown(int(st.Uid), int(st.Gid)); err != nil {
+			return err
+		}
+	}
+	if err := dst.Chmod(info.Mode()); err != nil {
+		return err
+	}
+	if err := os.Chtimes(tmp, info.ModTime(), info.ModTime()); err != nil {
+		return err
+	}
+	if err := dst.Sync(); err != nil {
+		return err
+	}
+	return dst.Close()
+}

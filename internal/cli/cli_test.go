@@ -22,6 +22,9 @@ import (
 	"github.com/grunclepug/arcus/internal/system/fake"
 )
 
+// userBackups is the user half's backup store below the root prefix.
+const userBackups = "home/u/.local/state/arcus/backups"
+
 // env is a sandboxed machine: a root prefix with /etc, a $HOME inside it,
 // fake system tools on PATH and an in-process sudo that runs exec-system as
 // "root". Nothing outside t.TempDir() is touched.
@@ -550,8 +553,8 @@ func TestEditedSystemFileBlocksTeardown(t *testing.T) {
 		t.Fatal("a refused off must change nothing")
 	}
 	must(t, e.run("off", "-f", "-y", "p"))
-	if e.read("etc/p.conf.arcus-foreign") != "BBBB" || e.read("etc/p.conf") != "<missing>" {
-		t.Errorf("forced off: conf=%q aside=%q", e.read("etc/p.conf"), e.read("etc/p.conf.arcus-foreign"))
+	if e.read("var/lib/arcus/foreign/etc/p.conf") != "BBBB" || e.read("etc/p.conf") != "<missing>" {
+		t.Errorf("forced off: conf=%q aside=%q", e.read("etc/p.conf"), e.read("var/lib/arcus/foreign/etc/p.conf"))
 	}
 }
 
@@ -735,15 +738,15 @@ func TestPlanShowsReplacedFilesAndRestoresThem(t *testing.T) {
 	e.module("shell", "", map[string]string{"home/.bashrc": "new"})
 
 	must(t, e.run("plan", "shell"))
-	if want := "! " + filepath.Join(e.home, ".bashrc") + " (kept as .bashrc.orig)"; !strings.Contains(e.out.String(), want) {
+	if want := "! " + filepath.Join(e.home, ".bashrc") + " (kept in arcus backups: orig)"; !strings.Contains(e.out.String(), want) {
 		t.Fatalf("plan lacks %q:\n%s", want, e.out.String())
 	}
 	must(t, e.run("on", "-y", "shell"))
-	if e.read("home/u/.bashrc") != "new" || e.read("home/u/.bashrc.orig") != "old" {
+	if e.read("home/u/.bashrc") != "new" || e.read(userBackups+"/orig/.bashrc") != "old" {
 		t.Fatal("on did not replace and keep the original")
 	}
 	must(t, e.run("off", "-y", "shell"))
-	if e.read("home/u/.bashrc") != "old" || e.read("home/u/.bashrc.orig") != "<missing>" {
+	if e.read("home/u/.bashrc") != "old" || e.read(userBackups+"/orig/.bashrc") != "<missing>" {
 		t.Fatal("off did not restore the original")
 	}
 }
@@ -1050,11 +1053,11 @@ func TestRegroupMovesFilesWithoutBackups(t *testing.T) {
 		[]byte("modules = [\n  \"shell\",\n  \"dev\",\n]\n"), 0o644))
 
 	must(t, e.run("plan"))
-	if out := e.out.String(); strings.Count(out, "kept as") != 1 || !strings.Contains(out, "kept as .inputrc.orig") {
+	if out := e.out.String(); strings.Count(out, "kept in arcus backups") != 1 || !strings.Contains(out, "kept in arcus backups: orig") {
 		t.Errorf("plan must keep a backup of .inputrc only:\n%s", out)
 	}
 	must(t, e.run("apply", "-y"))
-	if e.read("home/u/.inputrc.orig") != "original" {
+	if e.read(userBackups+"/orig/.inputrc") != "original" {
 		t.Error("the original .inputrc was not kept")
 	}
 	for rel, want := range map[string]string{".config/nvim/init.lua": "dev", ".config/tmux/tmux.conf": "dev", ".bashrc": "shell", ".inputrc": "dev"} {
@@ -1063,9 +1066,9 @@ func TestRegroupMovesFilesWithoutBackups(t *testing.T) {
 			t.Errorf("%s -> %q (%v), want a link into %s", rel, target, err, want)
 		}
 	}
-	for _, rel := range []string{".config/nvim/init.lua.orig", ".config/nvim/init.lua.nvim", ".config/tmux/tmux.conf.orig", ".config/tmux/tmux.conf.shell"} {
-		if _, err := os.Lstat(filepath.Join(e.home, rel)); err == nil {
-			t.Errorf("backup %s left behind", rel)
+	for _, rel := range []string{"orig/.config/nvim/init.lua", "nvim/.config/nvim/init.lua", "orig/.config/tmux/tmux.conf", "shell/.config/tmux/tmux.conf"} {
+		if got := e.read(userBackups + "/" + rel); got != "<missing>" {
+			t.Errorf("backup %s left behind: %q", rel, got)
 		}
 	}
 	must(t, e.run("plan"))
@@ -1421,7 +1424,7 @@ func TestAddedFileReplacesOne(t *testing.T) {
 		t.Errorf("plan lacks %q:\n%s", want, e.out.String())
 	}
 	must(t, e.run("apply", "-y"))
-	if e.read("home/u/.config/fastfetch/config.jsonc") != "module" || e.read("home/u/.config/fastfetch/config.jsonc.orig") != "mine" {
+	if e.read("home/u/.config/fastfetch/config.jsonc") != "module" || e.read(userBackups+"/orig/.config/fastfetch/config.jsonc") != "mine" {
 		t.Error("apply must deploy the module's file and keep the original")
 	}
 }
