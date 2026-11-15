@@ -53,8 +53,9 @@ func (a *app) cmdClean(args []string) error {
 	if !o.yes && !a.confirm("Proceed?") {
 		return errors.New("cancelled, nothing was changed")
 	}
+	a.changing = true
 	args = append([]string{"-clean", "-hash", plan.Hash(steps), "-home", a.paths.Home, "-config", a.paths.Config, "--"}, in.Desired...)
-	if err := a.sudo(args); err != nil {
+	if err := a.asRoot(args); err != nil {
 		return fmt.Errorf("clean failed: %w", err)
 	}
 	return nil

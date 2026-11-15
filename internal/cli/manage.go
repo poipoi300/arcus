@@ -173,6 +173,7 @@ func (a *app) cmdRm(args []string) error {
 	if !o.yes && !a.confirm(fmt.Sprintf("Delete %s?", m.Dir)) {
 		return errors.New("cancelled, nothing was deleted")
 	}
+	a.changing = true
 
 	// A module directory that is a symlink (into a dotfiles repository, say)
 	// loses only the link.
@@ -248,6 +249,7 @@ func (a *app) cmdMv(args []string) error {
 		return err
 	}
 
+	a.changing = true
 	if err := os.Rename(oldDir, newDir); err != nil {
 		return fmt.Errorf("renaming the module directory: %w", err)
 	}
@@ -260,7 +262,7 @@ func (a *app) cmdMv(args []string) error {
 	}
 	if inSystem {
 		args := []string{"-mv", "-home", a.paths.Home, "-config", a.paths.Config, "--", oldName, newName, oldDir, newDir}
-		if err := a.sudo(args); err != nil {
+		if err := a.asRoot(args); err != nil {
 			return fmt.Errorf("renaming the system layer (run 'arcus doctor'): %w", err)
 		}
 	}

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/grunclepug/arcus/internal/config"
+	"github.com/grunclepug/arcus/internal/history"
 	"github.com/grunclepug/arcus/internal/module"
 	"github.com/grunclepug/arcus/internal/plan"
 	"github.com/grunclepug/arcus/internal/state"
@@ -34,6 +35,9 @@ func (a *app) execSystem(args []string) error {
 	cacheDir := fs.String("cache", "", "the user's arcus cache directory (own builds)")
 	stateDir := fs.String("state", "", "the user's arcus state directory (the AUR packages it takes over)")
 	rebuild := fs.String("rebuild", "", "comma-separated own builds to rebuild")
+	logN := fs.Int("n", 20, "history: how many changes to list")
+	showLog := fs.Bool("history", false, "list the system half's history")
+	msg := fs.String("msg", "", "the user command this serves, for the history")
 	force := fs.Bool("f", false, "move edited files aside")
 	doctor := fs.Bool("doctor", false, "repair the system half")
 	mv := fs.Bool("mv", false, "rename: <old> <new> <old dir> <new dir>")
@@ -82,11 +86,22 @@ func (a *app) execSystem(args []string) error {
 	}
 
 	h := a.systemHalf()
+	if *showLog {
+		return a.printHistory(h.dir, *logN)
+	}
 	lock, err := h.lock(true)
 	if err != nil {
 		return err
 	}
 	defer lock.Release()
+	// Whatever this stage changed, however it ended, goes in the history while
+	// the lock is still held. A user command that runs several root stages
+	// leaves one commit per stage.
+	defer func() {
+		if err := history.Commit(h.dir, *msg); err != nil {
+			fmt.Fprintf(a.stderr, "warning: recording the state history: %v\n", err)
+		}
+	}()
 
 	switch {
 	case *doctor:

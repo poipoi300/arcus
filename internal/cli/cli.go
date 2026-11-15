@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/grunclepug/arcus/internal/config"
+	"github.com/grunclepug/arcus/internal/history"
 	"github.com/grunclepug/arcus/internal/layer"
 	"github.com/grunclepug/arcus/internal/module"
 	"github.com/grunclepug/arcus/internal/profile"
@@ -35,6 +36,8 @@ const usage = `usage: arcus <command> [flags] [arguments]
   rebuild <package...>     build and reinstall own builds even if their recipes didn't change
   clean                    remove packages no module lists; mark the rest's install reasons
   machine                  write this machine's module (kernel, bootloader, filesystems, swap)
+  history [-n N] [-system] list the changes to the state directory, newest first (needs git)
+  rollback [-f] <rev>      restore the host file as of a history revision, then apply it
   update                   replace arcus with the latest release from GitHub
   -version                 print the version
 
@@ -70,6 +73,12 @@ type app struct {
 	modules  module.Set
 	profiles profile.Set
 	rebuild  []string // own builds to build again even if unchanged
+
+	// cmdline is the command as typed, which the history records. changing is
+	// set once the command is past its dry runs and refusals, when it may
+	// change state.
+	cmdline  string
+	changing bool
 }
 
 // Run runs one arcus command; version is the running arcus's.
@@ -107,7 +116,17 @@ func (a *app) run(args []string) error {
 		return fmt.Errorf("looking up the current user: %w", err)
 	}
 	a.user = u.Username
+	a.cmdline = strings.Join(append([]string{cmd}, args...), " ")
 
+	err = a.dispatch(cmd, args)
+	if a.changing {
+		a.recordHistory()
+	}
+	return err
+}
+
+// dispatch runs the command a user typed.
+func (a *app) dispatch(cmd string, args []string) error {
 	switch cmd {
 	case "ls":
 		return a.cmdLs(args)
@@ -135,6 +154,10 @@ func (a *app) run(args []string) error {
 		return a.cmdMachine(args)
 	case "update":
 		return a.cmdUpdate(args)
+	case "history":
+		return a.cmdHistory(args)
+	case "rollback":
+		return a.cmdRollback(args)
 	case "help", "-h", "-help", "--help":
 		fmt.Fprint(a.stdout, usage)
 		return nil
@@ -302,5 +325,28 @@ func (a *app) confirm(question string) bool {
 	case <-a.ctx.Done():
 		fmt.Fprintln(a.stdout)
 		return false
+	}
+}
+
+// asRoot runs exec-system through sudo, telling it which command it serves
+// so the root side can record the change under that name.
+func (a *app) asRoot(args []string) error {
+	return a.sudo(append([]string{"-msg", a.cmdline}, args...))
+}
+
+// recordHistory commits the user half's state directory after a command that
+// changed it, under the half's lock so that no other arcus is mid-change.
+// The system half is committed by its own root process. A failure here only
+// warns: the command itself has already succeeded or rolled back.
+func (a *app) recordHistory() {
+	h := a.userHalf()
+	lock, err := h.lock(true)
+	if err != nil {
+		fmt.Fprintf(a.stderr, "warning: not recording the state history: %v\n", err)
+		return
+	}
+	defer lock.Release()
+	if err := history.Commit(h.dir, a.cmdline); err != nil {
+		fmt.Fprintf(a.stderr, "warning: recording the state history: %v\n", err)
 	}
 }
