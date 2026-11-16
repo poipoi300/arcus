@@ -35,7 +35,7 @@ func (a *app) execSystem(args []string) error {
 	configDir := fs.String("config", "", "the user's arcus config directory")
 	cacheDir := fs.String("cache", "", "the user's arcus cache directory (own builds)")
 	stateDir := fs.String("state", "", "the user's arcus state directory (the AUR packages it takes over)")
-	local := fs.String("local", "", "own builds in this install batch")
+	local := fs.String("local", "", "comma-separated own builds of the install batch (own build install stage)")
 	rebuild := fs.String("rebuild", "", "comma-separated own builds to rebuild")
 	logN := fs.Int("n", 20, "history: how many changes to list")
 	showLog := fs.Bool("history", false, "list the system half's history")
@@ -147,11 +147,11 @@ func (a *app) execSystem(args []string) error {
 	if !s.Root() {
 		return fmt.Errorf("exec-system: %d is not a root stage", *stage)
 	}
-	var batch [][]string
-	if *local != "" {
-		batch = append(batch, strings.Split(*local, ","))
+	var batch []string
+	if s == plan.LocalPackages {
+		batch = strings.Split(*local, ",")
 	}
-	sit, steps, err := a.systemPlan(in, h, batch...)
+	sit, steps, err := a.systemPlan(in, h, batch)
 	if err != nil {
 		return err
 	}
