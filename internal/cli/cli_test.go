@@ -558,6 +558,45 @@ func TestEditedSystemFileBlocksTeardown(t *testing.T) {
 	}
 }
 
+// doctor checks the system half read-only and asks for sudo only to repair.
+// The backup store is root-only, so a normal user cannot read it. Deployed
+// files and their backups must not be reported missing, and the permission
+// error is one note, not a problem.
+func TestDoctorUnreadableBackupStore(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("permission checks are bypassed as root")
+	}
+	e := newEnv(t)
+	must(t, os.WriteFile(filepath.Join(e.root, "etc", "locale.conf"), []byte("LANG=C\n"), 0o644))
+	must(t, os.WriteFile(filepath.Join(e.root, "etc", "locale.gen"), []byte("en_US.UTF-8 UTF-8\n"), 0o644))
+	e.module("base-cli", "", map[string]string{
+		"system/etc/locale.conf": "LANG=en_US.UTF-8\n",
+		"system/etc/locale.gen":  "en_US.UTF-8 UTF-8\n",
+	})
+	must(t, e.run("on", "-y", "base-cli"))
+
+	backups := filepath.Join(e.root, "var", "lib", "arcus", "backups")
+	if _, err := os.Stat(backups); err != nil {
+		t.Fatalf("backup store: %v", err)
+	}
+	must(t, os.Chmod(backups, 0))
+	t.Cleanup(func() { _ = os.Chmod(backups, 0o700) })
+
+	err := e.run("doctor")
+	out := e.out.String()
+	for _, bad := range []string{"deployment is missing", "recorded backup", "permission denied", "✗"} {
+		if strings.Contains(out, bad) {
+			t.Errorf("doctor output contains %q (%v):\n%s", bad, err, out)
+		}
+	}
+	if err != nil {
+		t.Errorf("doctor returned %v:\n%s", err, out)
+	}
+	if strings.Count(out, "sudo is needed to verify") != 1 || !strings.Contains(out, "No problems found.") {
+		t.Fatalf("want one backup-store note and no problems:\n%s", out)
+	}
+}
+
 func TestDoctor(t *testing.T) {
 	e := newEnv(t)
 	e.wlBase()

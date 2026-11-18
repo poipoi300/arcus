@@ -725,6 +725,106 @@ func TestRenameRelinksAndRetagsBackups(t *testing.T) {
 	})
 }
 
+// A root-only backup store is not evidence that a deployment or its backup
+// is gone. Doctor reads the system half without privileges; the store is
+// mode 0700, so stat and walk fail with EACCES. That must not be reported
+// as a missing file. A file that is actually gone, in a store this process
+// can read, still is.
+func TestUnreadableBackupStoreIsNotMissing(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("permission checks are bypassed as root")
+	}
+	eachHalf(t, func(t *testing.T, sb *sandbox) {
+		sb.hostFile("locale.conf", "LANG=C\n")
+		sb.moduleFile("base", "locale.conf", "LANG=en_US.UTF-8\n")
+		sb.moduleFile("top", "locale.conf", "LANG=C.UTF-8\n")
+		must(t, sb.activate("base"))
+		must(t, sb.activate("top"))
+		host := filepath.Join(sb.host, "locale.conf")
+
+		must(t, os.Chmod(sb.s.backupsDir(), 0))
+		t.Cleanup(func() { _ = os.Chmod(sb.s.backupsDir(), 0o700) })
+
+		for _, name := range []string{"base", "top"} {
+			findings, err := sb.s.Audit(name, sb.stack)
+			must(t, err)
+			if joined := strings.Join(findings, "\n"); strings.Contains(joined, "missing") {
+				t.Fatalf("%s: unreadable backup store reported as missing:\n%s", name, joined)
+			}
+		}
+		dangling, err := sb.s.DanglingBackups()
+		if !errors.Is(err, ErrStoreUnreadable) {
+			t.Fatalf("DanglingBackups err = %v, want ErrStoreUnreadable", err)
+		}
+		if len(dangling) != 0 {
+			t.Fatalf("dangling = %v", dangling)
+		}
+
+		// The host file is still visible. A mode change is drift even though
+		// the backup cannot be read. (Home deployments are symlinks; chmod
+		// would follow them into the module.)
+		if sb.s.Copy {
+			must(t, os.Chmod(host, 0o600))
+			findings, err := sb.s.Audit("top", sb.stack)
+			must(t, err)
+			joined := strings.Join(findings, "\n")
+			if !strings.Contains(joined, "mode/owner is 0600") || strings.Contains(joined, "missing") {
+				t.Fatalf("mode drift with an unreadable store:\n%s", joined)
+			}
+			must(t, os.Chmod(host, 0o644))
+		}
+
+		// The top deployment is the host file. Removing it is visible without
+		// the store; the backup is not, so only the deployment is reported.
+		must(t, os.Remove(host))
+		findings, err := sb.s.Audit("top", sb.stack)
+		must(t, err)
+		joined := strings.Join(findings, "\n")
+		if !strings.Contains(joined, host+": deployment is missing") || strings.Contains(joined, "recorded backup") {
+			t.Fatalf("host file removed, store unreadable:\n%s", joined)
+		}
+	})
+}
+
+// A deployment or backup that is actually absent is still reported when the
+// store can be read. A missing copy backup also leaves the host file
+// indistinguishable from the original, which planStep refuses to call
+// deployed.
+func TestMissingDeploymentAndBackupAreReported(t *testing.T) {
+	eachHalf(t, func(t *testing.T, sb *sandbox) {
+		sb.hostFile("locale.conf", "LANG=C\n")
+		sb.moduleFile("base", "locale.conf", "LANG=en_US.UTF-8\n")
+		must(t, sb.activate("base"))
+		l, err := sb.s.LoadLedger("base")
+		must(t, err)
+		host, backup := l.Entries[0].Host, l.Entries[0].Backup
+
+		must(t, os.Remove(host))
+		findings, err := sb.s.Audit("base", sb.stack)
+		must(t, err)
+		joined := strings.Join(findings, "\n")
+		if !strings.Contains(joined, "deployment is missing") || strings.Contains(joined, "recorded backup") {
+			t.Fatalf("missing host file:\n%s", joined)
+		}
+
+		if sb.s.Copy {
+			must(t, os.WriteFile(host, []byte("LANG=en_US.UTF-8\n"), 0o644))
+		} else {
+			must(t, os.Symlink(l.Entries[0].Src, host))
+		}
+		must(t, os.Remove(backup))
+		findings, err = sb.s.Audit("base", sb.stack)
+		must(t, err)
+		joined = strings.Join(findings, "\n")
+		if !strings.Contains(joined, "recorded backup "+backup+" is missing") {
+			t.Fatalf("missing backup:\n%s", joined)
+		}
+		if sb.s.Copy && !strings.Contains(joined, "deployment is missing") {
+			t.Fatalf("missing copy backup should leave the host file unclaimed:\n%s", joined)
+		}
+	})
+}
+
 func TestDanglingBackupsAndAudit(t *testing.T) {
 	eachHalf(t, func(t *testing.T, sb *sandbox) {
 		sb.hostFile("f", "x")

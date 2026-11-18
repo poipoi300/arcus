@@ -417,7 +417,12 @@ func (a *app) doctorHalf(h *half, st *state.State, fix bool, r *report) {
 	}
 
 	dangling, err := h.layer.DanglingBackups()
-	if err != nil {
+	// The store is root-only on the system half. Doctor checks that half
+	// read-only and asks for sudo only to repair, so a permission error here
+	// is a note, not a broken deployment.
+	if errors.Is(err, layer.ErrStoreUnreadable) {
+		fmt.Fprintf(r.w, "  · %v\n", err)
+	} else if err != nil {
 		r.problem("%v", err)
 	}
 	for _, d := range dangling {
