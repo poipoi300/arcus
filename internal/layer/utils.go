@@ -27,6 +27,17 @@ func exists(path string) bool {
 	return err == nil
 }
 
+// unreadable reports whether path cannot be stat'd for lack of permission.
+// A missing path is not unreadable: the parent could be searched, and the
+// final component is absent.
+func unreadable(path string) bool {
+	if path == "" {
+		return false
+	}
+	_, err := os.Lstat(path)
+	return errors.Is(err, os.ErrPermission)
+}
+
 // isWithin reports whether path is root or lies beneath it.
 func isWithin(path, root string) bool {
 	rel, err := filepath.Rel(root, path)
