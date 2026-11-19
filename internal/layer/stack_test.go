@@ -647,6 +647,18 @@ func TestDeletedDeploymentStillRestoresBackup(t *testing.T) {
 	})
 }
 
+func TestBackupRestoresIntoADeletedDirectory(t *testing.T) {
+	eachHalf(t, func(t *testing.T, sb *sandbox) {
+		sb.hostFile("sub/dir/f", "ORIGINAL")
+		sb.moduleFile("p", "sub/dir/f", "p")
+		before := sb.snapshot()
+		must(t, sb.activate("p"))
+		must(t, os.RemoveAll(filepath.Join(sb.host, "sub"))) // user deleted the whole directory
+		must(t, sb.deactivate("p", false))
+		assertSame(t, before, sb.snapshot())
+	})
+}
+
 func TestSharedCreatedDirectoryIsHandedOver(t *testing.T) {
 	eachHalf(t, func(t *testing.T, sb *sandbox) {
 		sb.moduleFile("a", "fresh/a", "a")
