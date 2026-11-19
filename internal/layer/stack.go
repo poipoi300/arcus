@@ -548,6 +548,11 @@ func (s *Stacker) teardownEntry(l *Ledger, idx int, above []*Ledger) error {
 		if exists(e.Host) {
 			return fmt.Errorf("cannot restore %q: %q is occupied", e.Backup, e.Host)
 		}
+		// The directory may be gone, removed by the user along with our
+		// deployment; without it the restore fails and stops the whole removal.
+		if err := os.MkdirAll(filepath.Dir(e.Host), 0o755); err != nil {
+			return fmt.Errorf("recreating the directory of %q: %w", e.Host, err)
+		}
 		if err := moveDurable(e.Backup, e.Host); err != nil {
 			return fmt.Errorf("restoring %q to %q: %w", e.Backup, e.Host, err)
 		}
