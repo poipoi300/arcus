@@ -108,7 +108,7 @@ path        = "Applications/T3-Code.AppImage"   # relative to $HOME; default App
 self_update = true                               # the app updates its own file; default false
 ```
 
-An AppImage is downloaded as you, without sudo, into a temp file next to its path; it must match `sha256` before anything else happens, then it is made executable and renamed into place. A failed or mismatched download fails the command and leaves nothing behind. The `url` must be https, and no two modules that are on may declare the same AppImage name or path. What apply does, by what is at the path:
+An AppImage is downloaded as you, without sudo, into a temp file next to its path; it must match `sha256` before anything else happens, then it is made executable and moved into place. It never replaces a file that turned up or changed there during the download. A failed or mismatched download fails the command and leaves nothing behind; the temp file of one that was killed is removed by the next download or `arcus doctor -fix`. The `url` must be https. No two modules that are on may declare the same AppImage name or path, and an AppImage can't go where a module that is on deploys a home file, a link or a directory from `dirs`. What apply does, by what is at the path:
 
 | At the path | `self_update = false` | `self_update = true` |
 |-------------|-----------------------|----------------------|
@@ -118,7 +118,7 @@ An AppImage is downloaded as you, without sudo, into a temp file next to its pat
 | the file arcus installed, unchanged, and the pin moved | download over it | leave it |
 | the file arcus installed, changed since | move it to `foreign/`, then download | leave it |
 
-Turning the module off, or dropping the table, removes the file arcus recorded: a pinned one only while it is unchanged (a changed one stays and is forgotten), a self-updating one either way. `arcus doctor` reports a declared AppImage that is missing, and a pinned one that doesn't match its pin; `apply` downloads it again. The state records each file's size, times and inode with its `sha256`, so a large AppImage is read again only once it changed.
+Turning the module off, or dropping the table, removes the file arcus recorded: a pinned one only while it is unchanged (a changed one stays and is forgotten), a self-updating one either way. Directories created for it stay; list them in `dirs` to have them removed when empty. `arcus doctor` reports a declared AppImage that is missing, and a pinned one that doesn't match its pin; `apply` downloads it again. The state records each file's size, times and inode with its `sha256`, so a large AppImage is read again only once it changed.
 
 A profile is a file that lists modules in stacking order, and the host file `~/.local/state/arcus/host.toml` picks profiles and adds the machine's own modules:
 
