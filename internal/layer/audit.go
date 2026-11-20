@@ -72,7 +72,10 @@ func (s *Stacker) Audit(module string, activeStack []string) ([]string, error) {
 	var added int
 	if tree := s.tree(module); tree != "" {
 		_ = filepath.WalkDir(tree, func(src string, d iofs.DirEntry, err error) error {
-			if err == nil && !d.IsDir() && !deployed[src] {
+			if err == nil && d.IsDir() {
+				return skipCache(d)
+			}
+			if err == nil && !deployed[src] {
 				added++
 			}
 			return nil
@@ -143,8 +146,11 @@ func (s *Stacker) DanglingBackups() ([]string, error) {
 	for _, p := range modules {
 		tree := s.tree(p)
 		err := filepath.WalkDir(tree, func(src string, d iofs.DirEntry, err error) error {
-			if err != nil || d.IsDir() {
+			if err != nil {
 				return err
+			}
+			if d.IsDir() {
+				return skipCache(d)
 			}
 			host, err := s.hostPathFor(tree, src)
 			if err != nil || seen[host] {
@@ -223,7 +229,8 @@ func (s *Stacker) Stale(module string) ([]Change, error) {
 		recorded[e.Src] = true
 		info, err := os.Lstat(e.Src)
 		switch {
-		case err != nil:
+		case err != nil, inCache(e.Src):
+			// A cache deployed before caches were skipped goes with the next redeploy.
 			changes = append(changes, Change{'-', e.Host, e.Src})
 		case e.Kind == KindCopy:
 			sum, err := hashFile(e.Src)
@@ -238,8 +245,14 @@ func (s *Stacker) Stale(module string) ([]Change, error) {
 		return changes, nil
 	}
 	err = filepath.WalkDir(tree, func(src string, d iofs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || recorded[src] {
+		if err != nil {
 			return err
+		}
+		if d.IsDir() {
+			return skipCache(d)
+		}
+		if recorded[src] {
+			return nil
 		}
 		host, err := s.hostPathFor(tree, src)
 		if err != nil {

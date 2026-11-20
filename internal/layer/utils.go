@@ -9,6 +9,7 @@ import (
 	iofs "io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -21,6 +22,22 @@ const (
 	accessW = 0x2
 	accessX = 0x1
 )
+
+// skipCache skips a Python bytecode cache in a module tree. Python writes
+// __pycache__ next to a module's scripts whenever they run from the tree (a
+// test, a hook importing a sibling); deployed, it would churn on every run
+// and its stale links break removals once the source moves.
+func skipCache(d iofs.DirEntry) error {
+	if d.Name() == "__pycache__" {
+		return filepath.SkipDir
+	}
+	return nil
+}
+
+// inCache reports whether path lies inside a Python bytecode cache.
+func inCache(path string) bool {
+	return slices.Contains(strings.Split(filepath.ToSlash(path), "/"), "__pycache__")
+}
 
 func exists(path string) bool {
 	_, err := os.Lstat(path)
