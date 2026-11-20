@@ -12,7 +12,7 @@ The project is in early development: until 1.0, commands and file formats may st
 
 * **Layered modules**: modules stack in order, the later one wins a shared file, and any module can be turned off in any order with the files below it restored byte for byte. The files a module replaces are kept in arcus's state directory, not next to them.
 * **Profiles**: a profile such as `laptop` lists the modules a kind of machine gets; the machine's host file picks profiles and adds its own modules on top.
-* **Every resource kind is reversible**: turning a module off removes the packages, units, groups and files it brought, whether arcus installed them or took them over (packages it takes over are marked explicitly installed, like the ones it installs), but never ones another module still wants or that are protected. A package another installed package still needs stays, marked as a dependency, so pacman removes it with the last package that needs it.
+* **Every resource kind is reversible**: turning a module off removes the packages, units, groups, files and AppImages it brought, whether arcus installed them or took them over (packages it takes over are marked explicitly installed, like the ones it installs), but never ones another module still wants or that are protected. A package another installed package still needs stays, marked as a dependency, so pacman removes it with the last package that needs it.
 * **Same result on any machine**: a machine set up by hand ends up like a fresh install of the same profile after `arcus machine`, `apply` and `clean`.
 * **Own builds**: a module can carry PKGBUILD recipes; arcus builds them with makepkg as you, installs them with pacman, and rebuilds when a recipe changes. An own build that another pending one needs to build (what `makepkg --syncdeps` resolves: `depends`, `makedepends` and, when `check()` runs, `checkdepends`, by name or through `provides`) is built and installed in an earlier batch, and one that a package depends on is installed with it or before; unrelated builds share a batch, and a dependency cycle is refused before anything changes.
 * **Conflicts in the plan**: an installed package that a package to install conflicts with is listed in the plan and removed right before its replacement goes in, unless a module wants it.
@@ -100,7 +100,25 @@ local  = []                 # own builds, from pkg/<name>/
 system = []
 user   = ["mako.service"]
 now    = false
+
+[appimages.t3code]          # one table per AppImage, downloaded into $HOME
+url         = "https://github.com/pingdotgg/t3code/releases/download/v0.1.11/T3-Code-x86_64.AppImage"
+sha256      = "8baa06a7bbaa3f729d69466fb211ed7006d6a6e4d800b9ecdacd831fd1686b14"
+path        = "Applications/T3-Code.AppImage"   # relative to $HOME; default Applications/<name>.AppImage
+self_update = true                               # the app updates its own file; default false
 ```
+
+An AppImage is downloaded as you, without sudo, into a temp file next to its path; it must match `sha256` before anything else happens, then it is made executable and moved into place. It never replaces a file that turned up or changed there during the download. A failed or mismatched download fails the command and leaves nothing behind; the temp file of one that was killed is removed by the next download or `arcus doctor -fix`. The `url` must be https. No two modules that are on may declare the same AppImage name or path, and an AppImage can't go where a module that is on deploys a home file, a link or a directory from `dirs`. What apply does, by what is at the path:
+
+| At the path | `self_update = false` | `self_update = true` |
+|-------------|-----------------------|----------------------|
+| nothing | download it | download it |
+| a file arcus didn't install, with the pinned `sha256` | take it over | take it over |
+| a file arcus didn't install, any other | move it to `foreign/` in the state directory, then download | take it over as it is |
+| the file arcus installed, unchanged, and the pin moved | download over it | leave it |
+| the file arcus installed, changed since | move it to `foreign/`, then download | leave it |
+
+Turning the module off, or dropping the table, removes the file arcus recorded: a pinned one only while it is unchanged (a changed one stays and is forgotten), a self-updating one either way. Directories created for it stay; list them in `dirs` to have them removed when empty. `arcus doctor` reports a declared AppImage that is missing, and a pinned one that doesn't match its pin; `apply` downloads it again. The state records each file's size, times and inode with its `sha256`, so a large AppImage is read again only once it changed.
 
 A profile is a file that lists modules in stacking order, and the host file `~/.local/state/arcus/host.toml` picks profiles and adds the machine's own modules:
 
@@ -117,7 +135,7 @@ modules  = ["aurora"]
 
 ### State and history
 
-Each half keeps its state in a directory: `~/.local/state/arcus` for the user half and `/var/lib/arcus` for the system half. Besides the host file, state and ledgers, it holds `backups/<tag>/<path>`, the files a module replaced (`<tag>` is `orig` for your own file, or the module whose file it was), and `foreign/<path>`, files edited since deployment that `-f` moved aside. Both mirror the path below `$HOME` or `/`, and nothing is left beside the original. Turning the module off puts a backup back. Backups that older versions left next to the file (`.bashrc.orig`) are still restored the same way.
+Each half keeps its state in a directory: `~/.local/state/arcus` for the user half and `/var/lib/arcus` for the system half. Besides the host file, state and ledgers, it holds `backups/<tag>/<path>`, the files a module replaced (`<tag>` is `orig` for your own file, or the module whose file it was), and `foreign/<path>`, files edited since deployment that `-f` moved aside and files apply replaced with a pinned AppImage. Both mirror the path below `$HOME` or `/`, and nothing is left beside the original. Turning the module off puts a backup back. Backups that older versions left next to the file (`.bashrc.orig`) are still restored the same way.
 
 The directory is a git repository (created on the first change; arcus needs `git` for it). After each command that changes state, arcus commits it with the command as the message, so the history shows which modules were on when, and keeps the replaced files. The system half's repository is readable by root only: `arcus history -system` asks sudo. `arcus rollback <rev>` restores the host file of the user half as of a revision from `arcus history`, shows the difference, and then does what `arcus apply` does, with the same confirmation and `-y`, `-n` and `-f`; if you decline, the host file stays as it is.
 

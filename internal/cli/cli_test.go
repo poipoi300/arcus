@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	iofs "io/fs"
+	"net/http"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -42,6 +43,8 @@ type env struct {
 	exe      string
 	version  string
 	releases string
+	// client downloads AppImages (from an httptest server).
+	client *http.Client
 }
 
 func newEnv(t *testing.T) *env {
@@ -70,7 +73,7 @@ func (e *env) app(stdin string) *app {
 		root: e.root, euid: 1000, getenv: os.Getenv,
 		hostname: func() (string, error) { return "testhost", nil },
 		exe:      func() (string, error) { return e.exe, nil },
-		version:  e.version, releases: e.releases,
+		version:  e.version, releases: e.releases, client: e.client,
 	}
 	a.sudo = func(args []string) error {
 		e.sudos++
