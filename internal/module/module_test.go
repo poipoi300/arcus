@@ -174,7 +174,7 @@ func TestResolveAppImageClashes(t *testing.T) {
 		t.Errorf("distinct names and paths: %v", err)
 	}
 	s["c"].AppImages = map[string]AppImage{"other": {URL: "https://x.org/a", SHA256: digest, Path: "Applications/app.AppImage/inner"}}
-	if _, err := s.Resolve([]string{"a", "c"}); err == nil || !strings.Contains(err.Error(), "both put an AppImage at ~/Applications/app.AppImage") {
+	if _, err := s.Resolve([]string{"a", "c"}); err == nil || !strings.Contains(err.Error(), "put AppImages at ~/Applications/app.AppImage and ~/Applications/app.AppImage/inner, one inside the other") {
 		t.Errorf("nested paths: %v", err)
 	}
 }

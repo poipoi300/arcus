@@ -75,7 +75,10 @@ func (s Set) appImageClashes(order []string) error {
 			}
 			for _, q := range slices.Sorted(maps.Keys(paths)) {
 				if paths[q] != m && nested(p, q) {
-					return fmt.Errorf("modules %q and %q both put an AppImage at ~/%s", paths[q], m, min(p, q))
+					if p == q {
+						return fmt.Errorf("modules %q and %q both put an AppImage at ~/%s", paths[q], m, p)
+					}
+					return fmt.Errorf("modules %q and %q put AppImages at ~/%s and ~/%s, one inside the other", paths[q], m, q, p)
 				}
 			}
 			names[name], paths[p] = m, m
