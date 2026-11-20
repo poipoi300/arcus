@@ -2,6 +2,7 @@ package module
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 )
 
@@ -55,7 +56,29 @@ func (s Set) Resolve(names []string) ([]string, error) {
 			}
 		}
 	}
+	if err := s.appImageClashes(order); err != nil {
+		return nil, err
+	}
 	return order, nil
+}
+
+// appImageClashes rejects two modules declaring an AppImage of the same name
+// or at the same path.
+func (s Set) appImageClashes(order []string) error {
+	names, paths := map[string]string{}, map[string]string{}
+	for _, m := range order {
+		for _, name := range slices.Sorted(maps.Keys(s[m].AppImages)) {
+			p := s[m].AppImages[name].Path
+			if other, ok := names[name]; ok {
+				return fmt.Errorf("modules %q and %q both declare AppImage %q", other, m, name)
+			}
+			if other, ok := paths[p]; ok {
+				return fmt.Errorf("modules %q and %q both put an AppImage at ~/%s", other, m, p)
+			}
+			names[name], paths[p] = m, m
+		}
+	}
+	return nil
 }
 
 // Dependents returns every module in stack that requires target, directly
