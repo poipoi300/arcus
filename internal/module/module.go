@@ -217,13 +217,45 @@ func (m *Module) validateAppImages() error {
 		if !homeRelative(ai.Path) {
 			return fmt.Errorf("appimages.%s: path %q must be a relative path inside $HOME", name, ai.Path)
 		}
-		if slices.Contains(paths, ai.Path) {
-			return fmt.Errorf("appimages.%s: path %q is used twice", name, ai.Path)
+		if slices.ContainsFunc(paths, func(p string) bool { return nested(p, ai.Path) }) {
+			return fmt.Errorf("appimages.%s: path %q is used twice, or inside another AppImage's", name, ai.Path)
 		}
 		paths = append(paths, ai.Path)
 		m.AppImages[name] = ai
 	}
 	return nil
+}
+
+// nested reports whether two paths below $HOME are the same or one is
+// inside the other.
+func nested(a, b string) bool {
+	return a == b || strings.HasPrefix(a, b+"/") || strings.HasPrefix(b, a+"/")
+}
+
+// claims describes what the module puts at p or around it in $HOME that an
+// AppImage at p would collide with: a file of its home/ tree at p or in
+// place of a directory above it, a link, or a listed directory at p or
+// inside it. It returns "" if there is nothing.
+func (m *Module) claims(p string) string {
+	for _, l := range slices.Sorted(maps.Keys(m.Links)) {
+		if nested(l, p) {
+			return "links ~/" + l
+		}
+	}
+	for _, d := range m.Dirs {
+		if d == p || strings.HasPrefix(d, p+"/") {
+			return "lists ~/" + d + " in dirs"
+		}
+	}
+	if m.Dir == "" {
+		return ""
+	}
+	for a := p; a != "."; a = path.Dir(a) {
+		if info, err := os.Lstat(filepath.Join(m.Dir, "home", a)); err == nil && (a == p || !info.IsDir()) {
+			return "deploys ~/" + a + " from its home/"
+		}
+	}
+	return ""
 }
 
 // AppImagePaths are the paths of the module's AppImages, sorted. Ownership

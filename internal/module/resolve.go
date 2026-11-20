@@ -63,7 +63,8 @@ func (s Set) Resolve(names []string) ([]string, error) {
 }
 
 // appImageClashes rejects two modules declaring an AppImage of the same name
-// or at the same path.
+// or at the same path (or one inside the other), and an AppImage where a
+// module's home files, links or dirs go.
 func (s Set) appImageClashes(order []string) error {
 	names, paths := map[string]string{}, map[string]string{}
 	for _, m := range order {
@@ -72,10 +73,17 @@ func (s Set) appImageClashes(order []string) error {
 			if other, ok := names[name]; ok {
 				return fmt.Errorf("modules %q and %q both declare AppImage %q", other, m, name)
 			}
-			if other, ok := paths[p]; ok {
-				return fmt.Errorf("modules %q and %q both put an AppImage at ~/%s", other, m, p)
+			for _, q := range slices.Sorted(maps.Keys(paths)) {
+				if paths[q] != m && nested(p, q) {
+					return fmt.Errorf("modules %q and %q both put an AppImage at ~/%s", paths[q], m, min(p, q))
+				}
 			}
 			names[name], paths[p] = m, m
+			for _, other := range order {
+				if what := s[other].claims(p); what != "" {
+					return fmt.Errorf("module %q puts an AppImage at ~/%s, but module %q %s", m, p, other, what)
+				}
+			}
 		}
 	}
 	return nil

@@ -101,6 +101,7 @@ func TestLoadRejects(t *testing.T) {
 		{"appimage bad name", "p", "[appimages.\"a b\"]\nurl = \"https://x.org/a\"\nsha256 = \"" + digest + "\"", "invalid name"},
 		{"appimage unknown key", "p", appImage(`selfupdate = true`), "appimages.a.selfupdate"},
 		{"appimage path twice", "p", appImage(`path = "x"`) + "\n[appimages.b]\nurl = \"https://x.org/b\"\nsha256 = \"" + digest + "\"\npath = \"x\"", "used twice"},
+		{"appimage inside another", "p", appImage(`path = "x"`) + "\n[appimages.b]\nurl = \"https://x.org/b\"\nsha256 = \"" + digest + "\"\npath = \"x/y\"", "inside another AppImage's"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -171,6 +172,58 @@ func TestResolveAppImageClashes(t *testing.T) {
 	}
 	if _, err := s.Resolve([]string{"b", "c"}); err != nil {
 		t.Errorf("distinct names and paths: %v", err)
+	}
+	s["c"].AppImages = map[string]AppImage{"other": {URL: "https://x.org/a", SHA256: digest, Path: "Applications/app.AppImage/inner"}}
+	if _, err := s.Resolve([]string{"a", "c"}); err == nil || !strings.Contains(err.Error(), "both put an AppImage at ~/Applications/app.AppImage") {
+		t.Errorf("nested paths: %v", err)
+	}
+}
+
+// An AppImage can't go where a module that is on links, lists a
+// directory or deploys a home file, nor below such a file.
+func TestResolveAppImageOverlaps(t *testing.T) {
+	root := t.TempDir()
+	s := graph(map[string][2][]string{"app": req(), "other": req()})
+	s["app"].AppImages = map[string]AppImage{"x": {URL: "https://x.org/a", SHA256: digest, Path: "Applications/x.AppImage"}}
+	s["other"].Dir = writeModule(t, root, "other", "")
+	if _, err := s.Resolve([]string{"app", "other"}); err != nil {
+		t.Fatalf("no overlap: %v", err)
+	}
+	mkfile := func(rel string) {
+		t.Helper()
+		p := filepath.Join(s["other"].Dir, "home", rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mkfile("Applications/readme") // a directory above it is fine
+	if _, err := s.Resolve([]string{"app", "other"}); err != nil {
+		t.Fatalf("home files beside it: %v", err)
+	}
+
+	tests := []struct {
+		name  string
+		setup func()
+		want  string
+	}{
+		{"link above it", func() { s["other"].Links = map[string]string{"Applications": "Sync/apps"} }, "links ~/Applications"},
+		{"link at it", func() { s["other"].Links = map[string]string{"Applications/x.AppImage": "Sync/x"} }, "links ~/Applications/x.AppImage"},
+		{"dir at it", func() { s["other"].Dirs = []string{"Applications/x.AppImage"} }, "lists ~/Applications/x.AppImage in dirs"},
+		{"home file at it", func() { mkfile("Applications/x.AppImage") }, "deploys ~/Applications/x.AppImage from its home/"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s["other"].Links, s["other"].Dirs = nil, []string{"Applications"} // a dir above it is fine
+			_ = os.Remove(filepath.Join(s["other"].Dir, "home", "Applications", "x.AppImage"))
+			tt.setup()
+			_, err := s.Resolve([]string{"app", "other"})
+			if err == nil || !strings.Contains(err.Error(), `module "app" puts an AppImage at ~/Applications/x.AppImage, but module "other" `+tt.want) {
+				t.Fatalf("got %v", err)
+			}
+		})
 	}
 }
 
