@@ -143,6 +143,7 @@ func (a *app) doctorHost(o *opts, r *report) {
 	if len(steps) > 0 {
 		r.problem("the system doesn't match the host file: 'arcus plan' shows %d step(s); run 'arcus apply'", len(steps))
 	}
+	a.doctorAppImages(in, r)
 
 	clean, err := a.clean(in)
 	if err != nil {
