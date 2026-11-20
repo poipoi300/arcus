@@ -315,11 +315,17 @@ func appImageRemovals(in Input, h Half) []Step {
 			if h.AppImages[p] || after.Owner(kind, p) != "" {
 				continue
 			}
-			if _, err := os.Lstat(filepath.Join(h.Home, p)); err == nil {
-				left = append(left, fmt.Sprintf("= %s: changed since arcus installed it, so it stays", p))
-			} else {
-				left = append(left, fmt.Sprintf("= %s: already gone", p))
+			info, err := os.Lstat(filepath.Join(h.Home, p))
+			why := "changed since arcus installed it, so it stays"
+			switch {
+			case err != nil:
+				why = "already gone"
+			case !info.Mode().IsRegular():
+				why = "no longer a file, so it stays"
+			case h.State.AppImage(p) == nil:
+				why = "arcus has no record of its content, so it stays"
 			}
+			left = append(left, fmt.Sprintf("= %s: %s", p, why))
 		}
 	}
 	if len(left) == 0 {
@@ -375,7 +381,15 @@ func appImageAdditions(in Input, h Half) ([]Step, error) {
 					"from " + d.URL,
 				}
 			case appimage.Record:
-				s.Changes = []string{fmt.Sprintf("self_update = %t", d.SelfUpdate)}
+				rec := after.AppImage(p)
+				switch {
+				case rec.SelfUpdate != d.SelfUpdate:
+					s.Changes = []string{fmt.Sprintf("self_update = %t", d.SelfUpdate)}
+				case rec.SHA256 != d.SHA256:
+					s.Changes = []string{fmt.Sprintf("= %s: already the pinned version", p)}
+				default:
+					s.Changes = []string{fmt.Sprintf("= %s: unchanged; its timestamps or mode changed", p)}
+				}
 			}
 			steps = append(steps, s)
 		}

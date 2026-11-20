@@ -288,3 +288,83 @@ func TestAppImageDownloadFails(t *testing.T) {
 		})
 	}
 }
+
+// confirmAfter answers the confirmation with yes, after running change: what
+// someone does to the system while the plan is on screen.
+type confirmAfter struct {
+	change func()
+	answer *strings.Reader
+}
+
+func (c *confirmAfter) Read(p []byte) (int, error) {
+	if c.answer == nil {
+		c.change()
+		c.answer = strings.NewReader("y\n")
+	}
+	return c.answer.Read(p)
+}
+
+// A file that turns up between the plan and the confirmation is left
+// alone: the step no longer matches what was confirmed.
+func TestAppImageChangedAfterThePlan(t *testing.T) {
+	e := newEnv(t)
+	r := e.serveAppImages(map[string]string{"/app": "app"})
+	e.appImageModule(r, "/app", "app", "")
+	a := e.app("")
+	a.stdin = &confirmAfter{change: func() {
+		must(t, os.MkdirAll(filepath.Join(e.home, "Applications"), 0o755))
+		must(t, os.WriteFile(filepath.Join(e.root, appPath), []byte("mine"), 0o755))
+	}}
+	err := a.run([]string{"on", "desk"})
+	if err == nil || !strings.Contains(err.Error(), "~/Applications/app.AppImage changed since the plan was shown") {
+		t.Fatalf("got %v", err)
+	}
+	if e.read(appPath) != "mine" || r.downloads() != 0 {
+		t.Errorf("file %q after %d downloads", e.read(appPath), r.downloads())
+	}
+}
+
+// Turning self_update on or off only updates the record while the file is
+// the pinned one; with it on, the app's own updates are left alone.
+func TestAppImageSelfUpdateToggled(t *testing.T) {
+	e := newEnv(t)
+	r := e.serveAppImages(map[string]string{"/app": "app"})
+	e.appImageModule(r, "/app", "app", "")
+	must(t, e.run("on", "-y", "desk"))
+
+	e.appImageModule(r, "/app", "app", "self_update = true")
+	e.plans("update the record of AppImage for desk: Applications/app.AppImage", "self_update = true")
+	must(t, e.run("apply", "-y"))
+	if rec := e.state(false).AppImage("Applications/app.AppImage"); rec == nil || !rec.SelfUpdate {
+		t.Fatalf("record = %+v", rec)
+	}
+	must(t, os.WriteFile(filepath.Join(e.root, appPath), []byte("app, updated by itself"), 0o755))
+	e.plans("Nothing to do.")
+
+	// Off again: the app's version is set aside for the pinned one.
+	e.appImageModule(r, "/app", "app", "self_update = false")
+	e.plans("replace AppImage for desk with the pinned version: Applications/app.AppImage")
+	must(t, e.run("apply", "-y"))
+	if e.read(appPath) != "app" || e.read("home/u/.local/state/arcus/foreign/Applications/app.AppImage") != "app, updated by itself" || r.downloads() != 2 {
+		t.Errorf("file %q, set aside %q, %d downloads", e.read(appPath), e.read("home/u/.local/state/arcus/foreign/Applications/app.AppImage"), r.downloads())
+	}
+}
+
+// doctor reports the temp file a killed download left, and -fix removes it.
+func TestDoctorRemovesDownloadLeftovers(t *testing.T) {
+	e := newEnv(t)
+	r := e.serveAppImages(map[string]string{"/app": "app"})
+	e.appImageModule(r, "/app", "app", "")
+	must(t, e.run("on", "-y", "desk"))
+	leftover := filepath.Join(e.home, "Applications", ".app.AppImage.12345.tmp")
+	must(t, os.WriteFile(leftover, []byte("partial"), 0o600))
+
+	if err := e.run("doctor"); err == nil || !strings.Contains(e.out.String(), leftover+" was left by an interrupted download") {
+		t.Fatalf("doctor (%v):\n%s", err, e.out.String())
+	}
+	must(t, e.run("doctor", "-fix"))
+	if _, err := os.Lstat(leftover); !errors.Is(err, iofs.ErrNotExist) {
+		t.Error("doctor -fix left the temp file")
+	}
+	must(t, e.run("doctor"))
+}

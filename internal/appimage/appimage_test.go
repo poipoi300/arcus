@@ -54,34 +54,46 @@ func TestDecide(t *testing.T) {
 		rec        *state.AppImage
 		selfUpdate bool
 		want       Action
+		touched    bool // the file kept its content but not its stamp
 	}{
-		{"missing, unrecorded", "", nil, false, Install},
-		{"missing, recorded", "", rec(pinned, false), false, Install},
-		{"missing, recorded, self-updating", "", rec(pinned, true), true, Install},
-		{"pinned, unrecorded", "v2", nil, false, Adopt},
-		{"pinned, unrecorded, self-updating", "v2", nil, true, Adopt},
-		{"other, unrecorded", "other", nil, false, Replace},
-		{"other, unrecorded, self-updating: as it is", "other", nil, true, Adopt},
-		{"pinned, recorded", "v2", rec(pinned, false), false, Keep},
-		{"pin moved, file unchanged", "v1", rec(old, false), false, Update},
-		{"pin moved, file modified", "other", rec(old, false), false, Replace},
-		{"pinned but modified", "other", rec(pinned, false), false, Replace},
-		{"pin moved, file already the new one", "v2", rec(old, false), false, Record},
-		{"self-updating, changed by the app", "other", rec(old, true), true, Keep},
-		{"self-updating, pin moved", "v1", rec(old, true), true, Keep},
-		{"self_update turned on", "other", rec(old, false), true, Record},
-		{"self_update turned off, pinned", "v2", rec(old, true), false, Record},
-		{"self_update turned off, unchanged", "v1", rec(old, true), false, Update},
-		{"self_update turned off, the app updated it", "other", rec(old, true), false, Replace},
+		{"missing, unrecorded", "", nil, false, Install, false},
+		{"missing, recorded", "", rec(pinned, false), false, Install, false},
+		{"missing, recorded, self-updating", "", rec(pinned, true), true, Install, false},
+		{"pinned, unrecorded", "v2", nil, false, Adopt, false},
+		{"pinned, unrecorded, self-updating", "v2", nil, true, Adopt, false},
+		{"other, unrecorded", "other", nil, false, Replace, false},
+		{"other, unrecorded, self-updating: as it is", "other", nil, true, Adopt, false},
+		{"pinned, recorded", "v2", rec(pinned, false), false, Keep, false},
+		{"pinned, recorded, touched", "v2", rec(pinned, false), false, Record, true},
+		{"pin moved, file unchanged", "v1", rec(old, false), false, Update, false},
+		{"pin moved, file modified", "other", rec(old, false), false, Replace, false},
+		{"pinned but modified", "other", rec(pinned, false), false, Replace, false},
+		{"pin moved, file already the new one", "v2", rec(old, false), false, Record, false},
+		{"self-updating, changed by the app", "other", rec(old, true), true, Keep, false},
+		{"self-updating, pin moved", "v1", rec(old, true), true, Keep, false},
+		{"self_update turned on", "other", rec(old, false), true, Record, false},
+		{"self_update turned off, pinned", "v2", rec(old, true), false, Record, false},
+		{"self_update turned off, unchanged", "v1", rec(old, true), false, Update, false},
+		{"self_update turned off, the app updated it", "other", rec(old, true), false, Replace, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "Applications", "a.AppImage")
+			rec := tt.rec
 			if tt.file != "" {
 				write(t, path, tt.file)
+				// A record of this very content has the file's stamp: arcus
+				// took it when it installed the file.
+				if rec != nil && rec.SHA256 == digest(tt.file) && !tt.touched {
+					f, err := Sum(path, nil)
+					if err != nil {
+						t.Fatal(err)
+					}
+					rec = &state.AppImage{SHA256: rec.SHA256, SelfUpdate: rec.SelfUpdate, Stamp: f.Stamp}
+				}
 			}
 			d := module.AppImage{URL: "https://x.org/a", SHA256: pinned, Path: "Applications/a.AppImage", SelfUpdate: tt.selfUpdate}
-			got, f, err := Decide(path, d, tt.rec)
+			got, f, err := Decide(path, d, rec)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -201,7 +213,7 @@ func TestFetch(t *testing.T) {
 	srv := serve(t, "#!/bin/sh\nexit 1\n")
 	home := t.TempDir()
 	path := filepath.Join(home, "Applications", "sub", "a.AppImage")
-	stamp, err := Fetch(context.Background(), srv.Client(), srv.URL+"/a", digest("#!/bin/sh\nexit 1\n"), path, nil)
+	stamp, err := Fetch(context.Background(), srv.Client(), srv.URL+"/a", digest("#!/bin/sh\nexit 1\n"), path, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +246,7 @@ func TestFetchReplaces(t *testing.T) {
 		}
 		return os.Rename(path, moved)
 	}
-	if _, err := Fetch(context.Background(), srv.Client(), srv.URL, digest("v2"), path, aside); err != nil {
+	if _, err := Fetch(context.Background(), srv.Client(), srv.URL, digest("v2"), path, nil, aside); err != nil {
 		t.Fatal(err)
 	}
 	if read(t, path) != "v2" || read(t, moved) != "v1" {
@@ -274,7 +286,7 @@ func TestFetchFailsCleanly(t *testing.T) {
 			write(t, filepath.Join(home, "old.AppImage"), "v1")
 			for _, path := range []string{filepath.Join(home, "old.AppImage"), filepath.Join(home, "New", "Dir", "a.AppImage")} {
 				aside := func() error { t.Error("aside ran"); return nil }
-				_, err := Fetch(tt.ctx, tt.client, tt.url, digest("v2"), path, aside)
+				_, err := Fetch(tt.ctx, tt.client, tt.url, digest("v2"), path, nil, aside)
 				for _, want := range tt.wantErr {
 					if err == nil || !strings.Contains(err.Error(), want) {
 						t.Errorf("error %v lacks %q", err, want)
@@ -307,11 +319,81 @@ func TestFetchStalls(t *testing.T) {
 	StallTimeout = 100 * time.Millisecond
 
 	path := filepath.Join(t.TempDir(), "a.AppImage")
-	_, err := Fetch(context.Background(), srv.Client(), srv.URL, digest("v2"), path, nil)
+	_, err := Fetch(context.Background(), srv.Client(), srv.URL, digest("v2"), path, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "nothing arrived for 100ms") {
 		t.Fatalf("stalled download: %v", err)
 	}
 	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
 		t.Error("a stalled download left a file")
+	}
+}
+
+// A file that turns up at the path, or changes there, while the download
+// runs is never overwritten.
+func TestFetchNeverOverwritesWhatChanged(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "a.AppImage")
+	var meanwhile func()
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		meanwhile()
+		_, _ = w.Write([]byte("v2"))
+	}))
+	t.Cleanup(srv.Close)
+
+	// Install: nothing was there when apply decided.
+	meanwhile = func() { write(t, path, "saved by the browser") }
+	_, err := Fetch(context.Background(), srv.Client(), srv.URL, digest("v2"), path, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "appeared while it was downloaded") || read(t, path) != "saved by the browser" {
+		t.Errorf("install over a new file: %v, file %q", err, read(t, path))
+	}
+
+	// Update: arcus's file changed after apply decided to replace it.
+	write(t, path, "v1")
+	f, err := Sum(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meanwhile = func() {
+		write(t, path, "v1 patched")
+		if err := os.Chtimes(path, time.Time{}, time.Now().Add(time.Hour)); err != nil {
+			t.Error(err)
+		}
+	}
+	_, err = Fetch(context.Background(), srv.Client(), srv.URL, digest("v2"), path, &f.Stamp, nil)
+	if err == nil || !strings.Contains(err.Error(), "changed while the new version was downloaded") || read(t, path) != "v1 patched" {
+		t.Errorf("update over a changed file: %v, file %q", err, read(t, path))
+	}
+	if got := entries(t, filepath.Dir(path)); len(got) != 1 {
+		t.Errorf("leftovers: %v", got)
+	}
+
+	// Update of the file as it was decided.
+	meanwhile = func() {}
+	f, err = Sum(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Fetch(context.Background(), srv.Client(), srv.URL, digest("v2"), path, &f.Stamp, nil); err != nil || read(t, path) != "v2" {
+		t.Errorf("update: %v, file %q", err, read(t, path))
+	}
+}
+
+// Temp files a killed download left are found, and the next download
+// removes them.
+func TestLeftovers(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.AppImage")
+	for _, name := range []string{".a.AppImage.123.tmp", ".a.AppImage.x.tmp", "123.tmp", ".b.AppImage.1.tmp", ".a.AppImage..tmp"} {
+		write(t, filepath.Join(dir, name), "partial")
+	}
+	got, err := Leftovers(path)
+	if err != nil || len(got) != 1 || got[0] != filepath.Join(dir, ".a.AppImage.123.tmp") {
+		t.Fatalf("Leftovers = %v, %v", got, err)
+	}
+	srv := serve(t, "v2")
+	if _, err := Fetch(context.Background(), srv.Client(), srv.URL, digest("v2"), path, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := Leftovers(path); len(got) != 0 {
+		t.Errorf("left %v", got)
 	}
 }

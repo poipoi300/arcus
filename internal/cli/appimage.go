@@ -50,8 +50,12 @@ func (a *app) appImage(h *half, st *state.State, s plan.Step, in plan.Input, sav
 				r.SHA256, r.Stamp = rec.SHA256, rec.Stamp
 			}
 		case appimage.Install, appimage.Update, appimage.Replace:
+			var expect *state.Stamp
 			var aside func() error
-			if act == appimage.Replace {
+			switch act {
+			case appimage.Update:
+				expect = &f.Stamp
+			case appimage.Replace:
 				aside = func() error {
 					where, err := h.layer.SetAside(path)
 					if err == nil {
@@ -61,7 +65,7 @@ func (a *app) appImage(h *half, st *state.State, s plan.Step, in plan.Input, sav
 				}
 			}
 			fmt.Fprintf(a.stdout, "Downloading %s\n", d.URL)
-			if r.Stamp, err = appimage.Fetch(a.ctx, a.httpClient(), d.URL, d.SHA256, path, aside); err != nil {
+			if r.Stamp, err = appimage.Fetch(a.ctx, a.httpClient(), d.URL, d.SHA256, path, expect, aside); err != nil {
 				return err
 			}
 			r.SHA256 = d.SHA256
@@ -76,8 +80,9 @@ func (a *app) appImage(h *half, st *state.State, s plan.Step, in plan.Input, sav
 
 // doctorAppImages reports the declared AppImages that are missing, and the
 // pinned ones (no self_update) that don't match their pin. Getting them
-// back is a download, which is apply's job, so -fix leaves them.
-func (a *app) doctorAppImages(in plan.Input, r *report) {
+// back is a download, which is apply's job, so -fix leaves them; it only
+// removes the temp files an interrupted download left.
+func (a *app) doctorAppImages(in plan.Input, fix bool, r *report) {
 	st, err := a.userHalf().loadState()
 	if err != nil {
 		return // reported with the user half
@@ -88,6 +93,7 @@ func (a *app) doctorAppImages(in plan.Input, r *report) {
 		for _, p := range m.AppImagePaths() {
 			_, d, _ := m.AppImageAt(p)
 			path := filepath.Join(a.paths.Home, p)
+			a.doctorLeftovers(path, fix, r)
 			info, err := os.Lstat(path)
 			switch {
 			case errors.Is(err, iofs.ErrNotExist):
@@ -116,5 +122,27 @@ func (a *app) doctorAppImages(in plan.Input, r *report) {
 	}
 	if found {
 		fmt.Fprintln(r.w, "    → 'arcus apply' downloads the pinned version; a changed file is moved to foreign/ in the state directory first")
+	}
+}
+
+// doctorLeftovers reports the temp files an interrupted download of path
+// left, and removes them with fix: no arcus is downloading while doctor
+// holds the lock.
+func (a *app) doctorLeftovers(path string, fix bool, r *report) {
+	leftovers, err := appimage.Leftovers(path)
+	if err != nil {
+		r.problem("%v", err)
+		return
+	}
+	for _, l := range leftovers {
+		r.problem("%s was left by an interrupted download", l)
+		if !fix {
+			continue
+		}
+		if err := os.Remove(l); err != nil {
+			r.failed(err)
+		} else {
+			r.repaired("removed it")
+		}
 	}
 }

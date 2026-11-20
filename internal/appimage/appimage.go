@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"syscall"
 	"time"
 
@@ -69,7 +70,9 @@ func Decide(path string, d module.AppImage, rec *state.AppImage) (Action, File, 
 	switch {
 	case f.SHA256 == d.SHA256 && rec == nil:
 		return Adopt, f, nil
-	case f.SHA256 == d.SHA256 && (rec.SHA256 != d.SHA256 || rec.SelfUpdate):
+	case f.SHA256 == d.SHA256 && (rec.SHA256 != d.SHA256 || rec.SelfUpdate || rec.Stamp != f.Stamp):
+		// A new stamp (touch, chmod, a restore) is recorded too, or every
+		// plan would read the file again.
 		return Record, f, nil
 	case f.SHA256 == d.SHA256:
 		return Keep, f, nil
@@ -85,7 +88,9 @@ func Decide(path string, d module.AppImage, rec *state.AppImage) (Action, File, 
 // file still has rec's stamp it has rec's content, which is returned
 // without reading it.
 func Sum(path string, rec *state.AppImage) (File, error) {
-	f, err := os.Open(path)
+	// Non-blocking, so a FIFO put there since the caller looked fails below
+	// instead of hanging the open.
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return File{}, err
 	}
@@ -93,6 +98,9 @@ func Sum(path string, rec *state.AppImage) (File, error) {
 	info, err := f.Stat()
 	if err != nil {
 		return File{}, err
+	}
+	if !info.Mode().IsRegular() {
+		return File{}, fmt.Errorf("%s isn't a regular file", path)
 	}
 	stamp := stampOf(info)
 	if rec != nil && rec.SHA256 != "" && rec.Stamp == stamp {
@@ -147,13 +155,29 @@ var StallTimeout = time.Minute
 var errStalled = errors.New("stalled")
 
 // Fetch downloads url into a temp file next to path and checks it against
-// want before anything else happens. Then it makes the file executable,
-// fsyncs it, runs aside (if set; it moves the file at path out of the
-// way) and renames it over path. On any failure before the rename the temp
-// file and the directories Fetch created are removed, and path is as it was.
-// It returns the stamp of the installed file. The download is never run.
-func Fetch(ctx context.Context, client *http.Client, url, want, path string, aside func() error) (stamp state.Stamp, err error) {
+// want before anything else happens. Then it makes the file executable and
+// fsyncs it, and puts it at path:
+//   - with expect set, over the file there, if that still has the stamp
+//     expect (the file arcus installed, which nobody changed meanwhile);
+//   - otherwise only while nothing is there, after aside (if set) moved
+//     the file there away, so a file that turns up during the download is
+//     never overwritten.
+//
+// On any failure before that the temp file and the directories Fetch
+// created are removed, and path is as it was. Temp files an earlier run
+// left (Leftovers) are removed first. It returns the stamp of the
+// installed file. The download is never run.
+func Fetch(ctx context.Context, client *http.Client, url, want, path string, expect *state.Stamp, aside func() error) (stamp state.Stamp, err error) {
 	dir := filepath.Dir(path)
+	leftovers, err := Leftovers(path)
+	if err != nil {
+		return stamp, err
+	}
+	for _, l := range leftovers {
+		if err := os.Remove(l); err != nil {
+			return stamp, err
+		}
+	}
 	created := missingDirs(dir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return stamp, err
@@ -190,23 +214,65 @@ func Fetch(ctx context.Context, client *http.Client, url, want, path string, asi
 			return stamp, err
 		}
 	}
-	if aside != nil {
-		if err := aside(); err != nil {
-			return stamp, err
-		}
-	}
-	if err := os.Rename(tmp.Name(), path); err != nil {
-		return stamp, fmt.Errorf("installing %s: %w", path, err)
+	if err := place(tmp.Name(), path, expect, aside); err != nil {
+		return stamp, err
 	}
 	placed = true
+	// The temp name is only a second link now; one left by a failure here
+	// is a leftover the next Fetch or doctor -fix removes.
+	_ = os.Remove(tmp.Name())
 	if err := atomicfile.SyncDir(dir); err != nil {
 		return stamp, err
 	}
-	info, err := tmp.Stat()
+	info, err := tmp.Stat() // after the rename or unlink, which change ctime
 	if err != nil {
 		return stamp, err
 	}
 	return stampOf(info), nil
+}
+
+// place puts the verified temp file at path, as Fetch describes.
+func place(tmp, path string, expect *state.Stamp, aside func() error) error {
+	if expect != nil {
+		info, err := os.Lstat(path)
+		if err != nil || stampOf(info) != *expect {
+			return fmt.Errorf("%s changed while the new version was downloaded; it was left as it is", path)
+		}
+		return os.Rename(tmp, path)
+	}
+	if aside != nil {
+		if err := aside(); err != nil {
+			return err
+		}
+	}
+	// A hard link, unlike a rename, fails if anything is at path.
+	err := os.Link(tmp, path)
+	if errors.Is(err, iofs.ErrExist) {
+		return fmt.Errorf("%s appeared while it was downloaded; it was left as it is and nothing was installed", path)
+	}
+	return err
+}
+
+// Leftovers returns the temp files that an interrupted Fetch of path left
+// next to it: .<name>.<digits>.tmp.
+func Leftovers(path string) ([]string, error) {
+	dir, base := filepath.Split(path)
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, iofs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var found []string
+	for _, e := range entries {
+		rest, ok := strings.CutPrefix(e.Name(), "."+base+".")
+		random, tmp := strings.CutSuffix(rest, ".tmp")
+		if ok && tmp && random != "" && strings.Trim(random, "0123456789") == "" {
+			found = append(found, filepath.Join(dir, e.Name()))
+		}
+	}
+	return found, nil
 }
 
 // download writes the body of url to w and returns its SHA-256. It gives
