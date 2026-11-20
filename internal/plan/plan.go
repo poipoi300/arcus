@@ -349,7 +349,11 @@ func appImageAdditions(in Input, h Half) ([]Step, error) {
 		taken := Step{Stage: UserSetup, Op: Adopt, Of: kind, Module: name}
 		for _, p := range declares[name] {
 			_, d, _ := in.Modules[name].AppImageAt(p)
-			act, f, err := appimage.Decide(filepath.Join(h.Home, p), d, after.AppImage(p))
+			path := filepath.Join(h.Home, p)
+			if h.Layer.OwnData(path) {
+				return nil, fmt.Errorf("module %s puts an AppImage at ~/%s, inside arcus's own data", name, p)
+			}
+			act, f, err := appimage.Decide(path, d, after.AppImage(p))
 			if err != nil {
 				return nil, err
 			}

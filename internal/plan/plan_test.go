@@ -712,3 +712,12 @@ func TestAppImagePlanRefusesADirectory(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+func TestAppImageNotInArcusData(t *testing.T) {
+	f := newAppImageFixture(t)
+	f.declare(".state/state.json", "v1", false)
+	_, err := User(f.in, Half{State: f.st, Layer: layer.NewHome(f.home, filepath.Join(f.home, ".state"), nil), Home: f.home})
+	if err == nil || !strings.Contains(err.Error(), "inside arcus's own data") {
+		t.Fatalf("got %v", err)
+	}
+}
