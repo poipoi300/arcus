@@ -48,7 +48,11 @@ func (s *Stacker) Audit(module string, activeStack []string) ([]string, error) {
 		switch {
 		case st.duplicate:
 			findings = append(findings, fmt.Sprintf("%s: an interrupted move left %s as a duplicate of the file there (turning the module off removes it)", e.Host, e.Backup))
-		case st.foreign:
+		case st.foreign, hiddenBackup && st.next == nil && st.finished && exists(st.loc) && !owns(e, st.loc):
+			// planStep calls the entry finished when it cannot see the
+			// backup, as after an interrupted teardown; a host file that is
+			// not the deployment is more likely an edit, and root's teardown
+			// classes it as foreign too.
 			findings = append(findings, fmt.Sprintf("%s was modified after activation (teardown will require -f)", st.loc))
 		case st.cache:
 			// A cache Python rewrote; the next restack removes it.

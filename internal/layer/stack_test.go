@@ -799,6 +799,33 @@ func TestUnreadableBackupStoreIsNotMissing(t *testing.T) {
 	})
 }
 
+// An edited deployment stays visible when its backup is in a store doctor
+// cannot read: planStep cannot see the backup, so it calls the entry
+// finished, but the host file is there and is not the deployment.
+func TestEditWithUnreadableBackupStoreIsReported(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("permission checks are bypassed as root")
+	}
+	eachHalf(t, func(t *testing.T, sb *sandbox) {
+		sb.hostFile("locale.conf", "LANG=C\n")
+		sb.moduleFile("base", "locale.conf", "LANG=en_US.UTF-8\n")
+		must(t, sb.activate("base"))
+		host := filepath.Join(sb.host, "locale.conf")
+		must(t, os.Remove(host))
+		must(t, os.WriteFile(host, []byte("LANG=edited\n"), 0o644))
+
+		must(t, os.Chmod(sb.s.backupsDir(), 0))
+		t.Cleanup(func() { _ = os.Chmod(sb.s.backupsDir(), 0o700) })
+
+		findings, err := sb.s.Audit("base", sb.stack)
+		must(t, err)
+		joined := strings.Join(findings, "\n")
+		if !strings.Contains(joined, host+" was modified after activation") || strings.Contains(joined, "missing") {
+			t.Fatalf("edited host file with an unreadable store:\n%s", joined)
+		}
+	})
+}
+
 // A deployment or backup that is actually absent is still reported when the
 // store can be read. A missing copy backup also leaves the host file
 // indistinguishable from the original, which planStep refuses to call
