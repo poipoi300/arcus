@@ -115,8 +115,9 @@ func (s *Stacker) hostPathFor(tree, src string) (string, error) {
 	return filepath.Join(s.Target, rel), nil
 }
 
-// ownData reports whether host lies inside arcus's own data.
-func (s *Stacker) ownData(host string) bool {
+// OwnData reports whether host lies inside arcus's own data: the state
+// directory or a module directory.
+func (s *Stacker) OwnData(host string) bool {
 	if isWithin(host, s.StateDir) {
 		return true
 	}
@@ -317,7 +318,7 @@ func (s *Stacker) planActivation(module string, below []*Ledger, checkAccess boo
 			problems = append(problems, fmt.Sprintf("%s: a module may not deploy into a .git directory", host))
 			return nil
 		}
-		if s.ownData(host) {
+		if s.OwnData(host) {
 			problems = append(problems, fmt.Sprintf("%s: refusing to layer over arcus's own data", host))
 			return nil
 		}
