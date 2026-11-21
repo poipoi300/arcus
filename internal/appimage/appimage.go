@@ -214,6 +214,7 @@ func Fetch(ctx context.Context, client *http.Client, url, want, path string, exp
 		}
 	}
 	if err := place(tmp.Name(), path, expect, aside); err != nil {
+		placed = errors.Is(err, errKept)
 		return stamp, err
 	}
 	placed = true
@@ -230,6 +231,10 @@ func Fetch(ctx context.Context, client *http.Client, url, want, path string, exp
 	return stampOf(info), nil
 }
 
+// beforeReplace runs right before place swaps a new version in; tests use
+// it to change the old file at the last moment.
+var beforeReplace = func() {}
+
 // place puts the verified temp file at path, as Fetch describes.
 func place(tmp, path string, expect *state.Stamp, aside func() error) error {
 	if expect != nil {
@@ -238,7 +243,7 @@ func place(tmp, path string, expect *state.Stamp, aside func() error) error {
 			return fmt.Errorf("%s changed while the new version was downloaded; it was left as it is", path)
 		}
 		if aside == nil {
-			return os.Rename(tmp, path)
+			return replace(tmp, path, *expect)
 		}
 	}
 	if aside != nil {
@@ -253,6 +258,42 @@ func place(tmp, path string, expect *state.Stamp, aside func() error) error {
 	}
 	return err
 }
+
+// replace swaps the new version at tmp in for the old one at path, then
+// checks the old file, now at tmp, against expect. A change that landed
+// after the last check is swapped back rather than lost. The rename gives
+// the old file a new ctime, so only size, mtime and inode are compared.
+func replace(tmp, path string, expect state.Stamp) error {
+	changed := fmt.Errorf("%s changed while the new version was downloaded; it was left as it is", path)
+	beforeReplace()
+	err := exchange(tmp, path)
+	if errors.Is(err, syscall.ENOSYS) || errors.Is(err, syscall.EINVAL) {
+		// No renameat2 here, or a filesystem without RENAME_EXCHANGE: a
+		// change in the moment since the check above is overwritten.
+		return os.Rename(tmp, path)
+	}
+	if err != nil {
+		return err
+	}
+	info, err := os.Lstat(tmp)
+	if err == nil && info.Size() == expect.Size && info.ModTime().UnixNano() == expect.MTime && stampOf(info).Inode == expect.Inode {
+		return nil
+	}
+	if err := exchange(tmp, path); err != nil {
+		// Keep the changed file out of reach of the temp file cleanup and
+		// of Leftovers, which only take names ending in .tmp.
+		kept := strings.TrimSuffix(tmp, ".tmp")
+		if os.Rename(tmp, kept) != nil {
+			kept = tmp
+		}
+		return fmt.Errorf("%w: %s changed while the new version was downloaded, and putting it back failed: %v; the changed file is at %s", errKept, path, err, kept)
+	}
+	return changed
+}
+
+// errKept marks a failed replace that left the old file at the temp name,
+// so Fetch must not remove it.
+var errKept = errors.New("not replaced")
 
 // Leftovers returns the temp files that an interrupted Fetch of path left
 // next to it: .<name>.<digits>.tmp.

@@ -381,6 +381,32 @@ func TestFetchNeverOverwritesWhatChanged(t *testing.T) {
 	}
 }
 
+// A change that lands after the last check but before the swap is not
+// overwritten either: the old file is checked once it is out of the way.
+func TestFetchKeepsALastMomentChange(t *testing.T) {
+	srv := serve(t, "v2")
+	path := filepath.Join(t.TempDir(), "a.AppImage")
+	write(t, path, "v1")
+	f, err := Sum(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeReplace = func() {
+		write(t, path, "v1 patched")
+		if err := os.Chtimes(path, time.Time{}, time.Now().Add(time.Hour)); err != nil {
+			t.Error(err)
+		}
+	}
+	t.Cleanup(func() { beforeReplace = func() {} })
+	_, err = Fetch(context.Background(), srv.Client(), srv.URL, digest("v2"), path, &f.Stamp, nil)
+	if err == nil || !strings.Contains(err.Error(), "changed while the new version was downloaded") || read(t, path) != "v1 patched" {
+		t.Errorf("last-moment change: %v, file %q", err, read(t, path))
+	}
+	if got := entries(t, filepath.Dir(path)); len(got) != 1 {
+		t.Errorf("leftovers: %v", got)
+	}
+}
+
 // Temp files a killed download left are found, and the next download
 // removes them.
 func TestLeftovers(t *testing.T) {
