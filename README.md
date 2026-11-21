@@ -124,7 +124,7 @@ modules  = ["aurora"]
 |----------|------|---------|-------------|
 | | `-y` | off | Don't ask for confirmation |
 | | `-n` | off | Only show the plan |
-| | `-f` | off | `off`: also turn off modules that require it; `off`, `apply`: move files edited since deployment aside to `<path>.arcus-foreign` |
+| | `-f` | off | `off`: also turn off modules that require it; `off`, `apply`: move files edited since deployment aside to `foreign/` in the state directory |
 | | `-fix` | off | `doctor`: apply the safe repairs |
 | | `-yes` | off | `arcus-install run`: don't ask to type the device name |
 | | `-version` | | Print the version (both binaries) |
@@ -137,7 +137,11 @@ modules  = ["aurora"]
 
 ## State and history
 
-arcus records the machine's state in a bare git repository at `~/.local/state/arcus/history`, readable only by you: the host file, both halves' state and ledgers, and the machine module's `module.toml`, as arcus read them. It records what arcus decided and did, never the contents of the files modules deploy. The system half is recorded as it was when the entry was made.
+The user half keeps its state in `~/.local/state/arcus` and the system half in `/var/lib/arcus`. Files displaced by a layer are stored in `backups/<tag>/<path>`, where `<tag>` is `orig` for the original host file or the name of the displaced layer. Turning the layer off restores the file at the path recorded in its ledger. Older sidecar backups such as `.bashrc.orig` still restore.
+
+Forced teardown keeps modified files under `foreign/<path>`. Both stores mirror the path below `$HOME` or `/` and use private directories. A move across filesystems preserves file content, mode, owner and mtime. Extended attributes and ACLs are lost, and hard links become independent files. A directory or special file that cannot be copied across filesystems during forced teardown stays beside the deployment as `<path>.arcus-foreign`.
+
+arcus records the machine's state in a bare git repository at `~/.local/state/arcus/history`, readable only by you: the host file, both halves' state and ledgers, and the machine module's `module.toml`, as arcus read them. The snapshot holds the paths recorded in the ledgers. Deployed files and the contents of `backups/` and `foreign/` stay outside the history. The system half is recorded as it was when the entry was made.
 
 Each command that changes the machine (`on`, `off`, `apply`, `rebuild`, `rollback`, `clean`, `machine`, `mv` of a module something selects or records, and `doctor -fix` when it repairs something) adds an entry once it is past its confirmation, named after the command line, with ` (failed)` when it failed. Plans, dry runs and declined confirmations add nothing. A change made in between, such as a hand edit of the host file or a run without git, becomes an entry of its own, `unrecorded changes`, before the next command's; the first entry on a machine with state is `history starts`.
 

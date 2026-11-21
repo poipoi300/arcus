@@ -31,7 +31,10 @@ const (
 //
 // Backup is the exact path the displaced predecessor was renamed to (empty if
 // the host path did not exist). It is recorded rather than re-derived from the
-// stack, so teardown never has to guess which ".orig"/".<layer>" file is ours.
+// stack, so teardown never has to guess which backup is ours. It normally
+// lies in the half's state directory (backups/<tag>/...), but ledgers by
+// older versions name a sidecar file next to the host (<path>.orig), which is
+// restored the same way.
 //
 // Copies also record the mode (octal) and owner they were deployed with, so
 // drift can be reported. An absent uid or gid is 0 (root).
