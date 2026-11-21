@@ -72,6 +72,16 @@ func mkdirAllDurable(dir string, mode fs.FileMode) error {
 	return nil
 }
 
+// SetAside moves the file at host to foreign/ in the state directory, at
+// the next free name, and returns where it went.
+func (s *Stacker) SetAside(host string) (string, error) {
+	aside := uniquePath(s.storePath(s.foreignDir(), host))
+	if err := moveIn(host, aside); err != nil {
+		return "", fmt.Errorf("moving %q aside: %w", host, err)
+	}
+	return aside, nil
+}
+
 // pruneStore removes the directories that taking path out of the store left
 // empty, up to its tag directory (backups) or foreign/ itself. It is
 // housekeeping: a directory that can't go is simply left. Paths outside the
