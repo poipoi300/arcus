@@ -149,6 +149,21 @@ func Removable(home string, st *state.State) (map[string]bool, error) {
 	return removable, nil
 }
 
+// HTTPSOnly is an http.Client CheckRedirect that refuses to follow a
+// redirect away from https, and more than 10 redirects, as the default does.
+func HTTPSOnly(req *http.Request, via []*http.Request) error {
+	if req.URL.Scheme != "https" {
+		return fmt.Errorf("redirect to %s is not https", req.URL.Redacted())
+	}
+	if len(via) >= 10 {
+		return errors.New("stopped after 10 redirects")
+	}
+	return nil
+}
+
+// Client is the HTTP client for AppImage downloads.
+var Client = &http.Client{CheckRedirect: HTTPSOnly}
+
 // StallTimeout is how long a download may go without receiving anything.
 var StallTimeout = time.Minute
 
@@ -378,7 +393,7 @@ func missingDirs(dir string) []string {
 // they are empty.
 func removeDirs(created []string) {
 	for _, d := range slices.Backward(created) {
-		if os.Remove(d) != nil {
+		if syscall.Rmdir(d) != nil { // never a file that took a directory's place
 			return
 		}
 	}

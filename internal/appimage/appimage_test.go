@@ -407,6 +407,26 @@ func TestFetchKeepsALastMomentChange(t *testing.T) {
 	}
 }
 
+// A redirect away from https is refused, so the pinned URL's transport
+// security can't be downgraded on the way.
+func TestFetchRefusesRedirectToHTTP(t *testing.T) {
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("v2"))
+	}))
+	t.Cleanup(plain.Close)
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, plain.URL, http.StatusFound)
+	}))
+	t.Cleanup(srv.Close)
+	client := srv.Client()
+	client.CheckRedirect = HTTPSOnly
+	path := filepath.Join(t.TempDir(), "a.AppImage")
+	_, err := Fetch(context.Background(), client, srv.URL, digest("v2"), path, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "not https") || read(t, path) != "<missing>" {
+		t.Errorf("redirect to http: %v, file %q", err, read(t, path))
+	}
+}
+
 // Temp files a killed download left are found, and the next download
 // removes them.
 func TestLeftovers(t *testing.T) {

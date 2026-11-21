@@ -17,7 +17,7 @@ func (a *app) httpClient() *http.Client {
 	if a.client != nil {
 		return a.client
 	}
-	return http.DefaultClient
+	return appimage.Client
 }
 
 // appImage carries out an AppImage step of the user half: a download, a
