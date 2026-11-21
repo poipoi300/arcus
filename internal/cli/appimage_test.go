@@ -368,3 +368,31 @@ func TestDoctorRemovesDownloadLeftovers(t *testing.T) {
 	}
 	must(t, e.run("doctor"))
 }
+
+func TestAppImageReplaceLeavesFileChangedDuringDownload(t *testing.T) {
+	e := newEnv(t)
+	path := filepath.Join(e.root, appPath)
+	must(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	must(t, os.WriteFile(path, []byte("hand-placed"), 0o755))
+
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := os.WriteFile(path, []byte("edited during download"), 0o755); err != nil {
+			t.Error(err)
+			http.Error(w, "could not edit test file", http.StatusInternalServerError)
+			return
+		}
+		_, _ = w.Write([]byte("pinned"))
+	}))
+	t.Cleanup(srv.Close)
+	e.client = srv.Client()
+	e.appImageModule(&appImageServer{Server: srv}, "/app", "pinned", "")
+	if err := e.run("on", "-y", "desk"); err == nil || !strings.Contains(err.Error(), "changed while the new version was downloaded") {
+		t.Errorf("replacement should refuse a file changed during download: %v", err)
+	}
+	if got := e.read(appPath); got != "edited during download" {
+		t.Errorf("AppImage = %q, want the concurrent edit", got)
+	}
+	if got := e.read("home/u/.local/state/arcus/foreign/Applications/app.AppImage"); got != "<missing>" {
+		t.Errorf("concurrent edit was moved to foreign/: %q", got)
+	}
+}

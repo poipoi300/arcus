@@ -234,7 +234,7 @@ func TestFetch(t *testing.T) {
 
 // A replacement only happens once the download is verified: aside sees
 // the old file in place and nothing half-written, and the new file
-// replaces it in one rename.
+// is linked into place.
 func TestFetchReplaces(t *testing.T) {
 	srv := serve(t, "v2")
 	path := filepath.Join(t.TempDir(), "a.AppImage")
@@ -246,7 +246,11 @@ func TestFetchReplaces(t *testing.T) {
 		}
 		return os.Rename(path, moved)
 	}
-	if _, err := Fetch(context.Background(), srv.Client(), srv.URL, digest("v2"), path, nil, aside); err != nil {
+	f, err := Sum(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Fetch(context.Background(), srv.Client(), srv.URL, digest("v2"), path, &f.Stamp, aside); err != nil {
 		t.Fatal(err)
 	}
 	if read(t, path) != "v2" || read(t, moved) != "v1" {
@@ -385,6 +389,10 @@ func TestLeftovers(t *testing.T) {
 	for _, name := range []string{".a.AppImage.123.tmp", ".a.AppImage.x.tmp", "123.tmp", ".b.AppImage.1.tmp", ".a.AppImage..tmp"} {
 		write(t, filepath.Join(dir, name), "partial")
 	}
+	other := filepath.Join(dir, ".a.AppImage.456.tmp")
+	if err := os.Mkdir(other, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	got, err := Leftovers(path)
 	if err != nil || len(got) != 1 || got[0] != filepath.Join(dir, ".a.AppImage.123.tmp") {
 		t.Fatalf("Leftovers = %v, %v", got, err)
@@ -395,5 +403,8 @@ func TestLeftovers(t *testing.T) {
 	}
 	if got, _ := Leftovers(path); len(got) != 0 {
 		t.Errorf("left %v", got)
+	}
+	if info, err := os.Stat(other); err != nil || !info.IsDir() {
+		t.Errorf("unrelated directory was removed: %v", err)
 	}
 }

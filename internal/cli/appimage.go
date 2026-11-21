@@ -56,6 +56,7 @@ func (a *app) appImage(h *half, st *state.State, s plan.Step, in plan.Input, sav
 			case appimage.Update:
 				expect = &f.Stamp
 			case appimage.Replace:
+				expect = &f.Stamp
 				aside = func() error {
 					where, err := h.layer.SetAside(path)
 					if err == nil {

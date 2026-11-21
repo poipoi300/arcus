@@ -157,11 +157,10 @@ var errStalled = errors.New("stalled")
 // Fetch downloads url into a temp file next to path and checks it against
 // want before anything else happens. Then it makes the file executable and
 // fsyncs it, and puts it at path:
-//   - with expect set, over the file there, if that still has the stamp
-//     expect (the file arcus installed, which nobody changed meanwhile);
-//   - otherwise only while nothing is there, after aside (if set) moved
-//     the file there away, so a file that turns up during the download is
-//     never overwritten.
+//   - when updating or moving a file aside, first check that it still has
+//     the expected stamp;
+//   - when installing, or after aside moved the old file away, put it in
+//     place only if the path is still empty.
 //
 // On any failure before that the temp file and the directories Fetch
 // created are removed, and path is as it was. Temp files an earlier run
@@ -238,7 +237,9 @@ func place(tmp, path string, expect *state.Stamp, aside func() error) error {
 		if err != nil || stampOf(info) != *expect {
 			return fmt.Errorf("%s changed while the new version was downloaded; it was left as it is", path)
 		}
-		return os.Rename(tmp, path)
+		if aside == nil {
+			return os.Rename(tmp, path)
+		}
 	}
 	if aside != nil {
 		if err := aside(); err != nil {
@@ -268,7 +269,7 @@ func Leftovers(path string) ([]string, error) {
 	for _, e := range entries {
 		rest, ok := strings.CutPrefix(e.Name(), "."+base+".")
 		random, tmp := strings.CutSuffix(rest, ".tmp")
-		if ok && tmp && random != "" && strings.Trim(random, "0123456789") == "" {
+		if ok && tmp && random != "" && strings.Trim(random, "0123456789") == "" && e.Type().IsRegular() {
 			found = append(found, filepath.Join(dir, e.Name()))
 		}
 	}
