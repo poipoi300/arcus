@@ -103,7 +103,25 @@ local  = []                 # own builds, from pkg/<name>/
 system = []
 user   = ["mako.service"]
 now    = false
+
+[appimages.t3code]          # one table per AppImage, downloaded into $HOME
+url         = "https://github.com/pingdotgg/t3code/releases/download/v0.1.11/T3-Code-x86_64.AppImage"
+sha256      = "8baa06a7bbaa3f729d69466fb211ed7006d6a6e4d800b9ecdacd831fd1686b14"
+path        = "Applications/T3-Code.AppImage"   # relative to $HOME; default Applications/<name>.AppImage
+self_update = true                               # the app updates its own file; default false
 ```
+
+Arcus downloads an AppImage as your user into a temporary file beside its destination. It checks `sha256` before making the file executable and moving it into place. It never replaces a file that turned up or changed there during the download. A failed or mismatched download stops the command and removes its temporary file. The next download or `arcus doctor -fix` removes temporary files left by an interrupted download. The `url` must be https. No two modules that are on may declare the same AppImage name or path, and an AppImage can't go where a module that is on deploys a home file, a link or a directory from `dirs`.
+
+| At the path | `self_update = false` | `self_update = true` |
+|-------------|-----------------------|----------------------|
+| nothing | download it | download it |
+| a file arcus didn't install, with the pinned `sha256` | take it over | take it over |
+| a file arcus didn't install, any other | move it to `foreign/` in the state directory, then download | take it over as it is |
+| the file arcus installed, unchanged, and the pin moved | download over it | leave it |
+| the file arcus installed, changed since | move it to `foreign/`, then download | leave it |
+
+Turning the module off, or dropping the table, removes the file arcus recorded: a pinned one only while it is unchanged (a changed one stays and is forgotten), a self-updating one either way. Directories created for it stay; list them in `dirs` to have them removed when empty. `arcus doctor` reports a declared AppImage that is missing, and a pinned one that doesn't match its pin; `apply` downloads it again. The state records each file's size, times and inode with its `sha256`, so a large AppImage is read again only once it changed.
 
 A profile is a file that lists modules in stacking order, and the host file `~/.local/state/arcus/host.toml` picks profiles and adds the machine's own modules:
 
@@ -139,7 +157,7 @@ modules  = ["aurora"]
 
 The user half keeps its state in `~/.local/state/arcus` and the system half in `/var/lib/arcus`. Files displaced by a layer are stored in `backups/<tag>/<path>`, where `<tag>` is `orig` for the original host file or the name of the displaced layer. Turning the layer off restores the file at the path recorded in its ledger. Older sidecar backups such as `.bashrc.orig` still restore.
 
-Forced teardown keeps modified files under `foreign/<path>`. Both stores mirror the path below `$HOME` or `/` and use private directories. A move across filesystems preserves file content, mode, owner and mtime. Extended attributes and ACLs are lost, and hard links become independent files. A directory or special file that cannot be copied across filesystems during forced teardown stays beside the deployment as `<path>.arcus-foreign`.
+Forced teardown and AppImage replacement keep displaced files under `foreign/<path>`. Both stores mirror the path below `$HOME` or `/` and use private directories. A move across filesystems preserves file content, mode, owner and mtime. Extended attributes and ACLs are lost, and hard links become independent files. A directory or special file that cannot be copied across filesystems during forced teardown stays beside the deployment as `<path>.arcus-foreign`.
 
 arcus records the machine's state in a bare git repository at `~/.local/state/arcus/history`, readable only by you: the host file, both halves' state and ledgers, and the machine module's `module.toml`, as arcus read them. The snapshot holds the paths recorded in the ledgers. Deployed files and the contents of `backups/` and `foreign/` stay outside the history. The system half is recorded as it was when the entry was made.
 
