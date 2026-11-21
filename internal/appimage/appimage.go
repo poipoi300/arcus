@@ -298,7 +298,9 @@ func replace(tmp, path string, expect state.Stamp) error {
 		// Keep the changed file out of reach of the temp file cleanup and
 		// of Leftovers, which only take names ending in .tmp.
 		kept := strings.TrimSuffix(tmp, ".tmp")
-		if os.Rename(tmp, kept) != nil {
+		if os.Link(tmp, kept) == nil { // a link never replaces what is there
+			_ = os.Remove(tmp)
+		} else {
 			kept = tmp
 		}
 		return fmt.Errorf("%w: %s changed while the new version was downloaded, and putting it back failed: %v; the changed file is at %s", errKept, path, err, kept)
