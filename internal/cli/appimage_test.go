@@ -115,7 +115,7 @@ func TestPinnedAppImage(t *testing.T) {
 	if e.read(appPath) != "app v2" {
 		t.Fatalf("after the pin moved: %q", e.read(appPath))
 	}
-	if _, err := os.Lstat(filepath.Join(e.root, appPath+".arcus-foreign")); !errors.Is(err, iofs.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(e.home, ".local/state/arcus/foreign")); !errors.Is(err, iofs.ErrNotExist) {
 		t.Error("arcus's own unchanged file must not be set aside")
 	}
 
@@ -126,8 +126,8 @@ func TestPinnedAppImage(t *testing.T) {
 	}
 	e.plans("replace AppImage for desk with the pinned version: Applications/app.AppImage", "! Applications/app.AppImage: not the pinned version")
 	must(t, e.run("apply", "-y"))
-	if e.read(appPath) != "app v2" || e.read(appPath+".arcus-foreign") != "patched" {
-		t.Fatalf("file %q, set aside %q", e.read(appPath), e.read(appPath+".arcus-foreign"))
+	if e.read(appPath) != "app v2" || e.read("home/u/.local/state/arcus/foreign/Applications/app.AppImage") != "patched" {
+		t.Fatalf("file %q, set aside %q", e.read(appPath), e.read("home/u/.local/state/arcus/foreign/Applications/app.AppImage"))
 	}
 
 	// Removed by hand: doctor reports it, apply downloads it again.
@@ -247,8 +247,8 @@ func TestAppImageAlreadyThere(t *testing.T) {
 
 	must(t, os.WriteFile(filepath.Join(e.root, appPath), []byte("hand-placed v0"), 0o755))
 	must(t, e.run("on", "-y", "desk"))
-	if e.read(appPath) != "app v1" || e.read(appPath+".arcus-foreign") != "hand-placed v0" {
-		t.Fatalf("file %q, set aside %q", e.read(appPath), e.read(appPath+".arcus-foreign"))
+	if e.read(appPath) != "app v1" || e.read("home/u/.local/state/arcus/foreign/Applications/app.AppImage") != "hand-placed v0" {
+		t.Fatalf("file %q, set aside %q", e.read(appPath), e.read("home/u/.local/state/arcus/foreign/Applications/app.AppImage"))
 	}
 }
 
@@ -345,8 +345,8 @@ func TestAppImageSelfUpdateToggled(t *testing.T) {
 	e.appImageModule(r, "/app", "app", "self_update = false")
 	e.plans("replace AppImage for desk with the pinned version: Applications/app.AppImage")
 	must(t, e.run("apply", "-y"))
-	if e.read(appPath) != "app" || e.read(appPath+".arcus-foreign") != "app, updated by itself" || r.downloads() != 2 {
-		t.Errorf("file %q, set aside %q, %d downloads", e.read(appPath), e.read(appPath+".arcus-foreign"), r.downloads())
+	if e.read(appPath) != "app" || e.read("home/u/.local/state/arcus/foreign/Applications/app.AppImage") != "app, updated by itself" || r.downloads() != 2 {
+		t.Errorf("file %q, set aside %q, %d downloads", e.read(appPath), e.read("home/u/.local/state/arcus/foreign/Applications/app.AppImage"), r.downloads())
 	}
 }
 

@@ -1,6 +1,7 @@
 package layer
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -100,6 +101,30 @@ func mkdirAllDurable(dir string, mode fs.FileMode) error {
 		}
 	}
 	return nil
+}
+
+// SetAside moves the file at host to foreign/ in the state directory, at
+// the next free name, and returns where it went. Like teardown's -f, it
+// stays next to the host as <host>.arcus-foreign when a file in the store
+// blocks the way or it can't be copied to the state directory's filesystem.
+func (s *Stacker) SetAside(host string) (string, error) {
+	aside := s.storeOr(s.storePath(s.foreignDir(), host), "")
+	var err error
+	if aside != "" {
+		aside = uniquePath(aside)
+		if err = moveIn(host, aside, nil); errors.Is(err, errCannotCopy) {
+			s.pruneStore(aside)
+			aside = ""
+		}
+	}
+	if aside == "" {
+		aside = uniquePath(host + ".arcus-foreign")
+		err = renameDurable(host, aside)
+	}
+	if err != nil {
+		return "", fmt.Errorf("moving %q aside: %w", host, err)
+	}
+	return aside, nil
 }
 
 // pruneStore removes the directories that taking path out of the store left

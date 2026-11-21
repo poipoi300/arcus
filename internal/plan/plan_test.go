@@ -909,7 +909,7 @@ func TestAppImagePlan(t *testing.T) {
 		}},
 		{Stage: UserSetup, Op: UpdateAppImage, Module: "desk", Names: []string{"bumped"}, Changes: []string{"from https://x.org/bumped"}},
 		{Stage: UserSetup, Op: ReplaceAppImage, Module: "desk", Names: []string{"foreign"}, Changes: []string{
-			"! foreign: not the pinned version nor the one arcus installed; it is moved aside to <path>.arcus-foreign",
+			"! foreign: not the pinned version nor the one arcus installed; it is moved to foreign/ in the state directory",
 			"from https://x.org/foreign",
 		}},
 		{Stage: UserSetup, Op: InstallAppImage, Module: "desk", Names: []string{"gone"}, Changes: []string{"from https://x.org/gone"}},

@@ -131,7 +131,7 @@ func (a *app) doctorAppImages(h *half, st *state.State, in plan.Input, fix bool,
 		}
 	}
 	if found {
-		fmt.Fprintln(r.w, "    → 'arcus apply' downloads the pinned version; a changed file is moved aside to <path>.arcus-foreign first")
+		fmt.Fprintln(r.w, "    → 'arcus apply' downloads the pinned version; a changed file is moved to foreign/ in the state directory first")
 	}
 
 	var others []string

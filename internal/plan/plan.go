@@ -401,7 +401,7 @@ func appImageAdditions(in Input, h Half) ([]Step, error) {
 				s.Changes = []string{"from " + d.URL}
 			case appimage.Replace:
 				s.Changes = []string{
-					fmt.Sprintf("! %s: not the pinned version nor the one arcus installed; it is moved aside to <path>.arcus-foreign", p),
+					fmt.Sprintf("! %s: not the pinned version nor the one arcus installed; it is moved to foreign/ in the state directory", p),
 					"from " + d.URL,
 				}
 			case appimage.Record:
